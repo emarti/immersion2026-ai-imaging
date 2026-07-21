@@ -1,0 +1,19 @@
+# OASIS-1 Alzheimer's CNN pipeline
+# Python 3.13 recommended (3.10-3.14 all supported by these packages).
+# Note: torchvision explicitly excludes Python 3.14.1 — use 3.13, or 3.14.0/3.14.2+.
+# All packages ship macOS arm64 + Linux wheels on PyPI, so `pip install -r requirements.txt`
+# needs no extra index.
+
+# --- steps 1-3 (data prep) ---
+numpy
+pyyaml           # config + splits + manifest files
+python-dotenv    # reads DATA_RAW_PATH from .env  (conda: mamba install -c conda-forge python-dotenv)
+pillow           # PNG slice writing
+nibabel          # reads Analyze 7.5 (.img/.hdr) volumes
+openpyxl         # step1 validates metadata.csv against docs/oasis_cross-sectional.xlsx
+pandas           # optional convenience for the network step (manifest is YAML, loaded via pyyaml)
+
+# --- step 4 (network) ---
+torch
+torchvision
+matplotlib       # step5 plots the step4 training logs (outputs/training_comparison.png)

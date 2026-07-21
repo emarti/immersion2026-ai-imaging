@@ -1,0 +1,107 @@
+# OASIS-1 Alzheimer's CNN — pipeline configuration
+# Single source of truth for steps 1-3. Every script reads this file.
+
+# ---------------------------------------------------------------------------
+# Data locations
+# ---------------------------------------------------------------------------
+# The RAW dataset root (machine-specific) is NOT set here -- it comes from the
+# DATA_RAW_PATH environment variable, loaded from a gitignored .env file. Copy
+# .env.example to .env and set it. See readme.md ("Configure data paths").
+#
+# All generated artifacts (metadata.csv, splits.yaml, manifest.yaml, and the
+# train/validate/test PNG folders) are written under this repo-relative root,
+# which is gitignored.
+outputs_path: ./outputs
+
+# The official OASIS-1 cross-sectional spreadsheet, shipped in the repo. step1
+# cross-checks the metadata.csv it derives from the per-session .txt files against
+# this reference and reports any discrepancies (non-fatal).
+reference_xlsx: ./docs/oasis_cross-sectional.xlsx
+
+# One folder per DVD is expected under the raw root; each must be un-tarred
+# manually before it is picked up here.
+discs: [disc1, disc2, disc3, disc4, disc5, disc6, disc7, disc8, disc9, disc10, disc11, disc12]
+
+# Glob (relative to a session directory) for the atlas-registered,
+# gain-field-corrected, brain-masked volume we slice. The infix n3/n4 encodes
+# the number of averaged scans, so we wildcard it.
+image_glob: "PROCESSED/MPRAGE/T88_111/*_t88_masked_gfc.img"
+
+# ---------------------------------------------------------------------------
+# Cohort selection (step2)
+# ---------------------------------------------------------------------------
+cohort:
+  age_min: 60            # inclusive
+  age_max: 79            # inclusive
+  # Cohort balancing policy (exact counts depend on the age range):
+  #   strict -- equal per (sex x label) cell, capped by the smallest cell (fewest subjects)
+  #   label  -- equal healthy/demented, sex left free (~2x strict)
+  #   none   -- all eligible subjects, no balancing (most subjects)
+  balance: label
+  seed: 42               # reproducible sampling + splitting
+  max_subjects: null     # cap total cohort size for fast test runs (null = use all);
+                         # kept balanced per the policy above. Use >= 12 to fill all splits.
+
+# ---------------------------------------------------------------------------
+# Transverse (axial / horizontal) slice geometry (step3)
+# ---------------------------------------------------------------------------
+# The masked_gfc volume is 176 (L-R) x 208 (A-P) x 176 (I-S) at 1 mm isotropic.
+# Transverse planes are taken along the I-S axis (axis index 2, length 176) --
+# horizontal cuts, as if a frisbee sliced through the skull.
+# Because voxels are 1 mm, an offset in mm equals an offset in voxels.
+slices:
+  slice_axis: 2                                # I-S axis (length 176)
+  middle_index: 88                             # geometric centre = 176 // 2
+  # Hippocampus band: axial I-S levels that contain the hippocampus. Standard
+  # reference is Talairach z ~= -15 to -25 mm; in this atlas (origin at the index-88
+  # geometric centre, ~10 mm above the AC) that maps to offsets -32..-20 (indices
+  # 56-68), verified anatomically on the rendered slices.
+  offsets_mm: [-27, -26, -25, -24, -23, -22]   # planes used for TRAINING (one patch per plane)
+  eval_offset_mm: -24                # the single plane used for VALIDATION and TEST
+
+# ---------------------------------------------------------------------------
+# Hippocampus ROI crop (step3)
+# ---------------------------------------------------------------------------
+# Following the DL4MI tutorial, step3 cuts an in-plane patch around each
+# hippocampus from every selected axial slice and saves LEFT and RIGHT as
+# separate samples (doubles the training data). Ranges are voxel indices into the
+# axial slice: `ap` = rows (anterior-posterior), `lr_left` = cols (left-right) for
+# the LEFT hippocampus (higher col = patient's left). The RIGHT box is the LEFT box
+# mirrored about the L-R centre. The patch is intentionally LARGER than the
+# hippocampus so step4 can random-crop within it later.
+hippocampus:
+  ap: [74, 154]            # A-P rows  -> 76 px tall
+  lr_left: [88, 152]       # L-R cols for the LEFT hippocampus  -> 60 px wide
+  # ap: [76, 152]            # A-P rows  -> 76 px tall
+  # lr_left: [90, 150]       # L-R cols for the LEFT hippocampus  -> 60 px wide
+  # Training-only random-shift augmentation (tutorial's CropLeftHC(random_shift)):
+  # when `apply_random_shifts` is true, each TRAIN patch is duplicated n_shifts times,
+  # each cropped at a random (dx,dy) in [-random_shift, random_shift] voxels. When
+  # false, training uses the unshifted box (one patch per plane/side). Validation/test
+  # never shift. random_shift=2 -> (2*2+1)^2 = 25 possible shifts; n_shifts=8 samples 8.
+  # (1 mm voxels here, so +/-2 = +/-2 mm; use 3 to match the tutorial's +/-3 mm.)
+  apply_random_shifts: true
+  random_shift: 4
+  n_shifts: 10
+
+# ---------------------------------------------------------------------------
+# Train / validate / test splits (step2)
+# ---------------------------------------------------------------------------
+# Splits are made at the SUBJECT level (all of a subject's slices stay in one
+# split) and stratified by (sex, label) so each split stays balanced.
+splits:
+  train:    0.70
+  validate: 0.15
+  test:     0.15
+
+# ---------------------------------------------------------------------------
+# Training (step4) + reporting (step5)
+# ---------------------------------------------------------------------------
+epochs: 100              # training passes per design in step4 (a CLI --epochs overrides)
+avg_last_epochs: 20      # step5 averages validation metrics over the last N epochs
+
+# ---------------------------------------------------------------------------
+# Output artifact locations
+# ---------------------------------------------------------------------------
+# Not configured here: every artifact is derived from outputs_path by
+# common.py (metadata.csv, splits.yaml, manifest.yaml, and <split>/ PNG folders).

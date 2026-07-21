@@ -1,0 +1,10 @@
+# Machine-specific data path
+.env
+
+# Generated pipeline outputs (metadata.csv, splits.yaml, manifest.yaml, PNG splits)
+outputs/
+
+# Python
+__pycache__/
+*.pyc
+.venv/

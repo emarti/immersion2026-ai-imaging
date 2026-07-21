@@ -1,0 +1,679 @@
+# Introduction — teaching a computer to read a brain MRI
+
+*Class notes. No prior knowledge of AI, programming, or neural networks is assumed.*
+
+These notes explain the **ideas** behind this project and, just as important, **why we
+made each choice**. They are the companion to [readme.md](readme.md), which is the
+practical "how to run it and what every setting does" guide. Read these notes for
+understanding; use the readme when you sit down to run the code.
+
+We build up slowly, one idea at a time. Each section adds a small piece, defines new
+words the moment they appear, and — wherever it helps — walks through a tiny worked
+example with real numbers. Watch for the **"Key idea"** boxes: those are the sentences
+worth remembering. At the very end there are a few **check-your-understanding**
+questions and a **glossary**.
+
+---
+
+## 1. The medical problem we're attacking
+
+**Alzheimer's disease** is the most common cause of dementia. It slowly damages the
+brain, and one of its earliest and most visible effects is that a small structure
+called the **hippocampus** shrinks (atrophies).
+
+- The **hippocampus** is a seahorse-shaped structure — one in each half of the brain,
+  tucked in the temporal lobe near your ears. It is central to forming new memories,
+  which is why memory loss is an early Alzheimer's symptom.
+- An **MRI** (magnetic resonance imaging) scan is, for our purposes, a **3-D grayscale
+  photograph of the brain**. Instead of flat pixels it is made of **voxels** (3-D
+  pixels); in our data one voxel represents 1 mm of brain.
+
+If the hippocampus visibly shrinks in Alzheimer's, then maybe a computer can learn to
+look at a brain scan and tell whether that shrinkage is present. That is exactly our
+task, stated as narrowly and concretely as possible:
+
+> **Key idea.** Given **one 2-D slice** of a brain MRI, output a **single yes/no
+> guess**: "demented" (1) or "healthy" (0). This kind of yes/no prediction is called
+> **binary classification**.
+
+To *teach* the computer, we need the correct answer for each scan — the **label**. Ours
+comes from the **CDR** (Clinical Dementia Rating), a score a clinician assigns:
+
+| CDR | Meaning | Our label |
+|---|---|---|
+| 0 | no dementia | 0 (healthy) |
+| 0.5, 1, 2 | very mild → moderate dementia | 1 (demented) |
+| (blank) | never assessed (e.g. young subjects) | excluded |
+
+Note that label 1 **pools three severities** — very mild (0.5), mild (1), and moderate
+(2) — into one "demented" class. That's a real simplification: catching moderate
+atrophy should be easier than very-mild. step5 therefore reports validation accuracy
+**broken down by CDR grade** so you can see this (with a caution: only a handful of
+validation subjects fall in each grade, so those per-grade numbers are noisy).
+
+The scans come from **OASIS-1**, a public dataset from Washington University: hundreds
+of people, each with an MRI and demographic/clinical information.
+
+---
+
+## 2. What is machine learning?
+
+A **traditional program** is a list of rules a human wrote: *"if this, do that."* That
+works when you can state the rules. But nobody can write down the exact rule for "this
+blur of gray pixels means a shrunken hippocampus." The pattern is too subtle and varies
+from person to person.
+
+**Machine learning** turns the problem around. Instead of writing rules, you show the
+program **many examples**, each paired with the **right answer**, and the program
+**adjusts itself** until it can produce the right answer on its own.
+
+- The "examples" here are hippocampus images; the "right answers" are the healthy/
+  demented labels. Learning from labeled examples like this is called **supervised
+  learning**.
+- Inside the program are thousands of adjustable numbers called **parameters** (or
+  **weights**). "Learning" literally means *slowly changing those numbers* so the
+  program's guesses match the labels better.
+
+### The one thing that makes this hard: generalization
+
+We do **not** want a program that just memorizes the exact images it was shown. A
+memorizer scores perfectly on those images and is useless on anyone new. We want a
+program that **works on people it has never seen**. That ability is called
+**generalization**, and protecting it drives almost every decision in this project.
+
+To measure generalization honestly, we split our people into **three groups**:
+
+- **Training set** — the examples the program actually learns from.
+- **Validation set** — held back during learning. We peek at it to check whether the
+  program is generalizing and to choose between different designs.
+- **Test set** — locked in a drawer until the very end, looked at **once**, to get an
+  unbiased final grade.
+
+Think of studying for an exam:
+
+> **Analogy.** The **training set** is the homework you practice on. The **validation
+> set** is a practice exam you take to see how you're doing (and decide what to study
+> next). The **test set** is the real, final exam. If you had seen the final exam's
+> questions while studying, your grade wouldn't mean anything — which is exactly why the
+> test set must stay untouched until the end.
+
+> **Key idea.** Good training performance is easy and not the goal. Good **validation/
+> test** performance — doing well on *new* people — is the goal.
+
+---
+
+## 3. Images are just grids of numbers
+
+A grayscale image is a **grid of numbers**, one per pixel, where the number is a
+brightness from **0 (black)** to **255 (white)**. That's all an image is to a computer.
+Our hippocampus patches are grids of roughly **64 × 80** such numbers.
+
+A tiny 3 × 3 corner of an image might look like this (dark background on the left,
+bright tissue on the right):
+
+```
+  10   12   200
+   9  180   210
+ 190  205   215
+```
+
+Everything a neural network does — detecting an edge, deciding "demented" — is just
+arithmetic on grids of numbers like this.
+
+---
+
+## 4. Neural networks and CNNs
+
+### 4.1 A single neuron
+
+The basic unit is a **neuron**: it takes several input numbers, multiplies each by a
+weight, adds them up, and passes the result through a simple "activation" step. Stack
+many neurons in **layers** — the outputs of one layer feed the next — and you get a
+**neural network**. The weights are the parameters that learning adjusts.
+
+### 4.2 Why plain networks are wrong for images
+
+If we connected every pixel to every neuron, an 80 × 64 image (5,120 pixels) would need
+millions of weights in the first layer alone, and the network would treat pixel (1,1)
+and pixel (30,40) as unrelated — throwing away the fact that **nearby pixels form
+shapes**. Images have *local structure*, and we should use it.
+
+### 4.3 Convolution: the key idea of a CNN
+
+A **convolution** uses a small **filter** (also called a kernel) — say 3 × 3 weights —
+that **slides across the image**. At each position it multiplies the filter by the
+pixels underneath, sums them, and writes one output number. The same filter is reused
+at every position, so it learns to detect **one pattern anywhere** in the image (an
+edge, a bright blob, a texture).
+
+**Worked example.** Take this vertical-edge filter and this image patch:
+
+```
+filter          image patch          multiply & sum
+-1 0 +1          10  12  200          (-1·10)+(0·12)+(1·200)
+-1 0 +1           9 180  210        + (-1·9) +(0·180)+(1·210)
+-1 0 +1         190 205  215        + (-1·190)+(0·205)+(1·215)
+                                     = 190 + 201 + 25 = 416  (large!)
+```
+
+The output is a **large positive number** because the right side is much brighter than
+the left — the filter "fired" on a vertical edge. Over a flat region the same filter
+sums to near zero. So one filter turns the image into a map of "where my pattern is."
+
+- A convolution **layer** has *many* filters. Each produces its own output grid, called
+  a **channel** (or feature map). If a layer has 32 filters, it outputs 32 channels.
+- **Stacking** convolution layers builds a hierarchy: the first layer finds edges; the
+  next combines edges into corners and blobs; deeper layers assemble those into
+  meaningful structures. This is why **C**onvolutional **N**eural **N**etworks are the
+  standard tool for images.
+
+> **Key idea.** A convolution is a small, reusable pattern-detector. Depth lets simple
+> patterns combine into complex ones.
+
+### 4.4 Pooling: shrink as you go
+
+After a convolution we usually **pool** to shrink the grid. **Max-pooling** with a
+2 × 2 window keeps only the largest value in each 2 × 2 block:
+
+```
+ 3  9 | 1  2          max of each 2x2 block
+ 4  6 | 0  8     -->    9  8
+------+------           7  5
+ 7  2 | 5  1
+ 1  0 | 3  4
+```
+
+A 4 × 4 grid becomes 2 × 2 — a quarter of the size. Pooling keeps the strongest
+responses while making the network cheaper and less sensitive to the exact position of
+a feature. So an image flows through a CNN getting **smaller in space but richer in
+channels**, e.g. `1 → 32 → 64 → 128` channels while the grid halves at each step.
+
+### 4.5 Two small helpers: ReLU and BatchNorm
+
+- **ReLU** ("rectified linear unit") is the activation step: it replaces every negative
+  number with 0 and keeps positives unchanged (`ReLU(-3)=0`, `ReLU(5)=5`). Without a
+  step like this the whole network would collapse into one straight-line function and
+  couldn't represent complex patterns.
+- **BatchNorm** rescales the numbers flowing between layers so they stay in a sane range
+  (roughly mean 0, spread 1). It mainly makes training faster and more stable.
+
+### 4.6 From a grid to a decision: GAP, the head, and the logit
+
+After the convolution blocks we have, say, 128 channels each still a small grid. Two
+final steps turn that into one yes/no answer:
+
+1. **Global average pooling (GAP)** collapses each channel's whole grid to a **single
+   average number**. So "128 channels of size 26 × 22" becomes just **128 numbers**.
+
+   > **Why GAP matters — a parameter comparison.** The old-fashioned alternative is to
+   > *flatten* the grid: 128 × 26 × 22 = **73,216** numbers, and a layer connecting
+   > those to 64 neurons would need ~4.7 **million** weights. GAP gives 128 numbers, so
+   > the same layer needs ~8 **thousand**. GAP also makes the network accept **any**
+   > patch size, since the grid is always averaged down to one number per channel.
+
+2. **The classifier head** is a couple of ordinary neuron layers that turn those 128
+   numbers into **one output number** called the **logit**. A big positive logit means
+   "confidently demented," a big negative logit "confidently healthy." Passing the logit
+   through the **sigmoid** function squashes it to a probability between 0 and 1. We
+   predict **demented when the logit is above 0** (probability above 0.5).
+
+### 4.7 A full pass through design 4a
+
+Putting it together, here is what happens to one hippocampus patch in the reference
+network (design **4a**, channels `8→16→32`), with the shape at each step
+(`channels × height × width`):
+
+```
+input patch            1 x 80 x 64
+block 1  conv 1->8,   BN, ReLU, maxpool   ->  8 x 40 x 32
+block 2  conv 8->16,  BN, ReLU, maxpool   -> 16 x 20 x 16
+block 3  conv 16->32, BN, ReLU, maxpool   -> 32 x 10 x  8
+global average pooling                    -> 32 x  1 x  1
+flatten                                   -> 32 numbers
+dropout, linear 32->64, ReLU, dropout     -> 64 numbers
+linear 64->1                              ->  1 logit
+```
+
+(The exact heights/widths don't matter — GAP absorbs them — which is why every design
+in the sweep works without hand-tuning sizes.)
+
+---
+
+## 5. How a network actually learns
+
+We have a network full of random weights making random guesses. How does it improve?
+
+1. **Loss — measuring wrongness.** A **loss function** scores how far the guesses are
+   from the truth (lower = better). For a yes/no question the standard is
+   **binary cross-entropy** (`BCEWithLogitsLoss` in the code). Intuitively it punishes
+   confident wrong answers a lot and correct confident answers a little.
+
+2. **Gradient descent — rolling downhill.** For each weight, calculus tells us which
+   direction (up or down) would *reduce* the loss, and by how much (the **gradient**).
+   We nudge every weight a little in the loss-reducing direction, then repeat.
+
+   > **Analogy.** Imagine a hiker on a foggy hillside trying to reach the valley. They
+   > can't see far, but they can feel which way is downhill under their feet, and take a
+   > small step that way. Repeat thousands of times and they descend. The network is the
+   > hiker; the loss is the height; the gradient is the slope under its feet.
+
+3. **Learning rate — how big a step.** The **learning rate** (we use `1e-4` = 0.0001) is
+   the size of each step. Too **big** and the hiker overshoots the valley and bounces
+   around; too **small** and they crawl and it takes forever. Getting it right matters a
+   lot (see §10).
+
+A few more words you'll meet:
+
+- **Batch** — we don't feed one image at a time; we process a small group (here 32) and
+  average their gradients per step. That's a **batch**.
+- **Epoch** — one full pass over all the training images. Training runs many epochs.
+- **Optimizer** — the exact recipe for turning gradients into weight updates. We use
+  **AdamW**, a robust modern default.
+- **Weight decay** — a gentle pull that keeps weights from growing large, which nudges
+  the model toward simpler solutions (a form of regularization, see §8).
+
+---
+
+## 6. Measuring success — and why "accuracy" can lie
+
+**Accuracy** = the fraction of images the model labels correctly. It's the obvious
+metric, but it can be dangerously misleading when the two classes are unequal.
+
+> **Example.** Suppose a group is 90 % healthy, 10 % demented. A lazy model that
+> *always* says "healthy," no matter the image, gets **90 % accuracy** — while being
+> completely useless (it never catches a single sick person).
+
+To see through this, we lay out the four possible outcomes in a **confusion matrix**.
+Say we evaluate 40 images (20 truly demented, 20 truly healthy) and the model gets:
+
+```
+                    predicted demented   predicted healthy
+truly demented           12  (TP)             8  (FN)
+truly healthy             3  (FP)            17  (TN)
+```
+
+- **TP** true positives (12): sick, correctly caught.
+- **FN** false negatives (8): sick, wrongly cleared — the dangerous misses.
+- **FP** false positives (3): healthy, wrongly alarmed.
+- **TN** true negatives (17): healthy, correctly cleared.
+
+From these we compute three honest metrics:
+
+- **Sensitivity** (recall) = TP / (TP + FN) = 12/20 = **0.60** — of the truly demented,
+  how many did we catch?
+- **Specificity** = TN / (TN + FP) = 17/20 = **0.85** — of the truly healthy, how many
+  did we correctly clear?
+- **Balanced accuracy** = average of the two = (0.60 + 0.85)/2 = **0.725** — the fair
+  single headline.
+
+Why balanced accuracy is fair: the always-say-healthy model has sensitivity 0 and
+specificity 1, so its balanced accuracy is (0 + 1)/2 = **0.5** — exactly "no better than
+a coin flip," as it should be.
+
+> **Key idea.** We keep our groups **50/50 healthy/demented**, so chance is **0.50** and
+> plain accuracy already equals balanced accuracy. We still log **sensitivity** and
+> **specificity** because they reveal *which way* a model leans (does it miss sick
+> people, or cry wolf on healthy ones?).
+
+The step4 scripts print all four every epoch and save them to a CSV; step5 also reports
+each design's average over the last 20 epochs.
+
+---
+
+## 7. The central challenge: overfitting
+
+There are two opposite ways to fail:
+
+- **Underfitting** — the model is too simple or weak to capture the pattern, so it does
+  poorly even on the training data. *(The student who didn't study and fails the
+  homework.)*
+- **Overfitting** — the model is powerful enough to **memorize** the training images
+  (near-perfect training scores) but it latched onto quirks of *those specific brains*,
+  so it flops on new people (poor validation scores). *(The student who memorized last
+  year's exam answers word-for-word and is lost when the questions change.)*
+
+Balancing these two is the **bias–variance trade-off**, and it is the whole game when
+data is scarce — which is exactly our situation.
+
+**Why small data makes overfitting so easy — and a subtle trap.** We have on the order
+of a hundred subjects. Worse, the several slices (and left/right patches) we take from
+one person are **not independent**: they are near-duplicate views of the *same* brain
+with the *same* label.
+
+> **Worked point.** If we have 110 subjects and take, say, 12 patches each, that's 1,320
+> training images — but only about **110 independent pieces of information**. The images
+> *look* like a lot of data; they are not. The **effective sample size ≈ the number of
+> subjects.**
+
+> **Key idea — the most important sentence in these notes.** On a dataset this small,
+> **data is the bottleneck, not the network.** A fancier or bigger model cannot invent
+> information that isn't in the data — it will just memorize harder.
+
+---
+
+## 8. The toolbox for coping with limited data
+
+Given fixed, scarce data, here are the levers — and where each appears in this project:
+
+- **More data / a bigger cohort.** The most direct fix. Our `cohort.balance: label`
+  setting nearly doubles the usable subjects (see §10).
+- **Data augmentation.** Create new-ish examples by slightly perturbing existing ones —
+  our optional random **shifts** of the crop box — so the model can't rely on the exact
+  pixel positions. (`apply_random_shifts` in the config.)
+- **Dropout.** The single most important regularizer in this project — during training,
+  randomly switch **off** a fraction of the internal numbers on each step so the network
+  can't over-rely on any one feature. It's essential enough here that it gets its **own
+  section next (§9)**, where our designs' dropout settings are compared.
+- **Weight decay.** Keeps weights small → simpler model (already on, `1e-4`).
+- **Smaller / narrower models.** Fewer parameters means less room to memorize — but go
+  too far and the model **underfits**. The sweep includes tiny models precisely to see
+  this edge.
+- **Early stopping.** The best validation score often comes *early*; training longer
+  after that just deepens overfitting, so you keep the best epoch rather than the last.
+
+---
+
+## 9. Dropout — the regularizer that matters most here
+
+Every lever in §8 helps, but on data this scarce **dropout** is the one that moves the
+needle most, so it's worth understanding on its own.
+
+**What it does.** On each training step, dropout looks at the numbers flowing out of a
+layer and, at random, sets a fraction `p` of them to **0** for that step (the survivors
+are scaled up so the totals stay comparable). A different random subset is dropped every
+step. That's the whole mechanism.
+
+> **Worked picture.** After global average pooling design 4a has **32 numbers** (§4.7).
+> With `p = 0.5`, on this step roughly **16 of them are randomly zeroed** and the rest
+> pass through; on the next step a *different* ~16 are zeroed. The network never gets to
+> lean on the same fixed set of features two steps running.
+
+**Why that fights overfitting.** If any single feature might vanish on any given step, the
+network **can't lean on it** — it's forced to spread the decision across many features
+that each carry a little of the signal. Equivalently, you're training a whole
+**ensemble** of slightly different "thinned" sub-networks that all share weights and must
+agree; averaging over an ensemble is a classic way to generalize better.
+
+**Two things that trip people up:**
+
+- **Training only.** Dropout is **on while training, fully off while evaluating** (at
+  eval every unit is used). This is one reason validation behaves differently from
+  training — and why turning dropout *up* lowers training accuracy but can *raise*
+  validation accuracy.
+- **It removes no parameters.** The model is exactly the same size with `p = 0.2` or
+  `p = 0.8`; dropout only *regularizes* how the existing weights are trained. (Contrast
+  with making the net *narrower*, which genuinely removes parameters — §8.)
+
+**Our two dials.** Each design has dropout in two places in its head (see the 4a pass in
+§4.7): `dropout1` right after GAP, and `dropout2` after the 64-unit layer. We write them
+as a pair — the notation **"0.8 / 0.4"** means `p1 = 0.8`, `p2 = 0.4`. The first (on the
+post-GAP bottleneck) is the stronger lever.
+
+**Choosing `p` is a dial, not a "more is better."**
+
+- Too **little** dropout → the net memorizes the training brains (overfits).
+- Too **much** dropout → the net can't fit the signal at all (**underfits**), and on a
+  very small network it can **collapse to a trivial answer** — always guessing one class.
+
+You can watch this in the sweep: designs **4a and 4b** are the same 8-16-32 net and differ
+*only* in dropout (4a uses 0.6 / 0.2, 4b none), so the gap between them is the effect of
+dropout by itself — expect 4b to overfit (training accuracy climbs high, validation lags).
+The running results in `lab-notes.md` also show the *other* failure mode: an 8-16-32 net
+pushed to **high** dropout (0.8 / 0.4) saw its *specificity* collapse to 0.445 — it started
+crying wolf, calling almost everyone demented — and a tiny net with high dropout **plus**
+augmentation over-regularized the other way into "always healthy." Same lesson from
+opposite sides.
+
+> **Key idea.** Dropout is the main tuning dial in this project, and its right value
+> depends on the model's size and the amount of data: **match the amount of dropout to
+> how much the model could otherwise memorize.** Small, lean nets need *less* of it, not
+> more.
+
+---
+
+## 10. The design choices in this project, and why
+
+Almost every choice below is a response to §7: *small, correlated data.*
+
+**2-D slices, not the full 3-D brain.** Serious research (including the tutorial we
+follow) feeds the whole 3-D volume to a 3-D CNN. We deliberately use flat 2-D slices
+because they are far simpler to understand, quicker to train, and let a beginner see the
+entire pipeline end-to-end. It is a weaker signal — an honest trade for clarity.
+
+**Transverse slices at the hippocampus.** Alzheimer's shows up in the hippocampus, so
+that's where we look, taking horizontal ("transverse") cross-sections at the height
+where the hippocampus sits. We found that height empirically — the hippocampus lives
+around **Talairach z ≈ −15 to −25 mm**, which in our atlas is a few slices below the
+brain's middle — and confirmed it by actually rendering the slices and looking.
+
+**Crop a small box around the hippocampus — left *and* right.** Feeding the whole slice
+makes the network waste effort on irrelevant tissue and black border. Cropping a small
+box focuses it on the disease-relevant region. We crop **both** hippocampi and save them
+as **separate examples**, which **doubles** the training data for free.
+
+**Split by subject, not by slice.** This one prevents a silent disaster called **data
+leakage**. Because a person's patches are near-duplicates, if some of their patches
+landed in *training* and others in *test*, the model could "recognize the individual
+brain" and score falsely high — it would look brilliant and be worthless on real new
+patients. We assign each **whole subject** to one split, so this cannot happen.
+
+**Three balancing modes; default `label`.** Dementia risk depends on age and sex, so a
+careless dataset could let the model cheat on a **confound** (e.g. guess from sex
+instead of brain shape). The strictest option (`strict`) forces equal Male/Female ×
+Healthy/Demented groups — fairest, but limited by the rarest group (elderly *healthy
+men* are scarce), which throws away roughly half the subjects. We noticed the data is
+*already* nearly balanced by label, so `label` mode — equal healthy/demented, sex left
+free — nearly **doubles** the usable subjects while keeping chance at exactly 0.50, at
+the mild cost of a possible sex confound. `none` uses everyone. It's a genuine research
+trade-off, exposed as a one-word switch.
+
+**Age-match the groups — a word on `age_min`.** Age is the sneakiest **confound** here.
+Dementia grows more common with age, so if the cohort reaches down into younger people (a
+low `age_min`), the healthy group skews young and the demented group skews old — and a
+network can score well by quietly learning to estimate **age (or sex)**, which track the
+label in this sample, instead of reading hippocampal shrinkage. Raising `age_min` (e.g. to
+**70**) narrows the cohort to a band where healthy and demented subjects *overlap* in age,
+forcing the model to earn its predictions from the brain itself. The price is real: **far
+fewer subjects and noticeably lower accuracy.** That drop is not a bug — it is honest.
+Part of the higher accuracy at a low `age_min` was the age/sex confound leaking in, not
+disease detection. On small clinical datasets a lower, well-controlled number usually
+beats a higher, confounded one. (This is also why we watch **sensitivity/specificity**
+and, once the groups are unbalanced, **balanced accuracy** — a model cheating via a
+confound often gives itself away by leaning hard toward one class.)
+
+**The design sweep — sampling the design space.** Rather than *tell* you about the
+bias–variance trade-off and the effects of dropout, width, and depth, we let you *see*
+them. We train a shared **baseline** plus three variants that each change exactly **one**
+thing, so every comparison against the baseline isolates a single knob. The four sample
+three different directions:
+
+| Design | Conv blocks | Dropout | Direction sampled |
+|---|---|---|---|
+| 4a | 8→16→32 (3) | 0.6 / 0.2 | baseline (~8.2k params) |
+| 4b | 8→16→32 (3) | 0.0 / 0.0 | no dropout → overfitting demo |
+| 4c | 16→32→64 (3) | 0.6 / 0.2 | wider (~28k params) |
+| 4d | 8→16 (2) | 0.6 / 0.2 | shallower (~2.4k params) |
+
+This is a *sample* of the design space, not an exhaustive grid — one step in a few
+directions from the baseline. The general lesson we expect, and that you can confirm: on
+data this scarce, removing regularization (4b) overfits, going wider (4c) tends not to
+help, and going shallower (4d) costs surprisingly little, while the lean baseline holds
+its own. No amount of
+architecture cleverness beats simply having more/cleaner data. (Running results live in
+`lab-notes.md`; to fill in the space *between* these sample points yourself, see §13.)
+
+**Many slices for training, one fixed slice for validation/test.** Training benefits
+from variety, so it uses several nearby planes (and optionally random shifts).
+Validation and test use a **single fixed** plane so the score is deterministic and
+comparable run-to-run — you're measuring the model, not the luck of which slice got
+picked.
+
+**Learning rate `1e-4`, and *not* training forever.** Early on we ran 500–1000 epochs
+and watched validation accuracy spike early, then drift *back down* while training
+accuracy kept climbing — the visual signature of overfitting past the sweet spot. The
+reference tutorial reaches its result in only **30 epochs** with a *smaller* learning
+rate (`1e-4`) and a tiny batch. Matching that makes learning gentler and steadier, so
+the good solution isn't blown past. **More epochs is not the fix; gentler, better-
+conditioned training is.**
+
+**Augmentation as an on/off switch.** The random-shift augmentation is controlled by
+`apply_random_shifts` and ships **off**, so you can run with it off, then on, and
+measure whether it actually helps. Augmentation touches **training only** — validation
+and test must remain a fixed, honest target. When we ran exactly that experiment (Run 1
+vs Run 2 in `lab-notes.md`), the verdict was sobering: because each training image
+becomes `n_shifts` copies (8×), every epoch takes **~8× longer**, yet it **mainly helped
+the leaner nets** and **did not appreciably raise** the headline balanced accuracy — and
+piled on top of very high dropout in the tiniest net it *over-*regularized and made a
+model collapse. Augmentation is still a good habit (it's standard practice and pays off
+more with larger, real datasets), but here it is a modest lever, not a magic one.
+
+---
+
+## 11. A yardstick: the tutorial we're based on
+
+This project follows the ARAMIS/Clinica
+[Deep Learning for Medical Imaging](https://aramislab.paris.inria.fr/workshops/DL4MI/2022/notebooks/classification.html)
+classification lab. Its hippocampus CNN reaches about **0.78 balanced accuracy** on
+validation (≈ **0.81** when the left- and right-hippocampus predictions are combined by
+voting) — in just **30 epochs**.
+
+Why does theirs do better than we should expect from ours? Three instructive reasons:
+
+1. **Heavier preprocessing.** Their scans are *non-linearly* warped to a common template
+   and grey-matter-segmented, so the hippocampus is cleaner and lines up better across
+   people. Ours are only *linearly* aligned and skull-stripped.
+2. **3-D, not 2-D.** They use the whole hippocampus volume; we use flat slices.
+3. **Gentler training.** Low learning rate, small batch, few epochs.
+
+> **Key idea.** ≈ 0.78 balanced accuracy is a realistic target, and closing the gap
+> would come from **better data preparation and going 3-D**, *not* from a bigger network
+> or more epochs. This is a teaching pipeline: expect modest, noisy numbers, and treat
+> the honest *method* — including its limits — as the real lesson.
+
+---
+
+## 12. What we learned, and what to try next
+
+- **Data quality and quantity dominate model choice.** The fanciest network cannot beat
+  the information ceiling of the data.
+- **Dropout is the main dial.** Moderate dropout on a lean net has been our best
+  recipe; too much (especially on a tiny net, or stacked on augmentation) backfires (§9).
+- **Augmentation is a modest lever here.** Turning on random shifts costs ~8× the
+  training time and, on this small dataset, mainly helps the leaner nets without moving
+  the headline much — worth doing as good practice, not as a fix (§10).
+- **Measure honestly.** Validation on a handful of subjects is noisy; balanced accuracy
+  plus sensitivity/specificity tell you more than raw accuracy; and the best epoch is
+  usually *not* the last.
+- **Sensible next steps, in rough order of payoff:** pull in more subjects (`label`
+  cohort) → turn on augmentation → add early stopping / keep the best-validation epoch →
+  combine left+right into one per-subject vote → (to chase the tutorial) heavier
+  preprocessing or a 3-D model. Only after all that is settled do you finally spend the
+  **test set**, once, for an unbiased final number.
+- For concrete, hands-on experiments to run, see the next section (§13).
+
+---
+
+## 13. Things to play with
+
+The pipeline is meant to be poked at. Here are experiments you can run — most are a
+one-line change to `config.yaml` or to the `Net` class in a `step4?-train-network.py`
+file — roughly from easiest to most ambitious. Change **one thing at a time**, re-run,
+and compare in `lab-notes.md`.
+
+*Extend the sweep — the four designs only sample a few points; fill in the curve yourself
+by editing the `Net` class in a `step4?-train-network.py` file:*
+
+- **Fill in the dropout dial.** The sweep shows dropout only at 0.6 / 0.2 (4a) and off
+  (4b). Sweep the `nn.Dropout(...)` values from 0.0 up toward ~0.9 and watch training and
+  validation pull apart when it's too low (overfit) and collapse when it's too high.
+- **Fill in the width axis.** Designs 4a (8-16-32) and 4c (16-32-64) sample two widths.
+  Try narrower (e.g. 4-8-16) or wider still (32-64-128) by changing the conv-layer channel
+  counts, and find where adding channels stops helping.
+- **Fill in the depth axis.** Designs 4d (2 blocks) and 4a (3 blocks) sample two depths.
+  Try 1 block, or 4+, by adding/removing a `conv`+`bn` block (and its pool in `forward`)
+  — GAP means you never have to re-tune the classifier sizes.
+
+*Other directions:*
+
+- **Swap the activation.** Replace `ReLU` with `LeakyReLU` (lets a little negative signal
+  through) or `GELU` (a smooth modern default) in the `Net` blocks, and see if training
+  is steadier.
+- **Resize the hippocampus crop.** Widen or tighten the box via `hippocampus.ap` and
+  `lr_left` — more context vs. a tighter focus on the structure. (Re-run step 3.)
+- **Trade age range against sample size.** A tighter `cohort.age_min/age_max` makes the
+  healthy and demented groups more comparable but gives you fewer subjects; loosening it
+  does the opposite. Where's the sweet spot?
+- **Balance sex *and* dementia.** Switch `cohort.balance` from `label` to `strict` to
+  remove a possible sex confound — at the cost of roughly half the data. Does honest
+  validation accuracy go up or down?
+- **Go 3-D.** Feed the whole hippocampus *volume* to a 3-D CNN instead of flat slices —
+  the biggest jump toward the tutorial's numbers, and the biggest code change.
+- **Try other architectures.** Add residual/skip connections, an attention block, or
+  depthwise-separable convolutions and see whether they help on so little data (usually
+  the lean nets still win — a good thing to confirm rather than assume).
+- **Vote per subject.** Average (or majority-vote) the left- and right-hippocampus
+  predictions into **one guess per person**, as the tutorial does — often a free bump.
+- **Test-time augmentation.** At evaluation, average the prediction over several shifted
+  crops of the *same* patch to smooth out noise.
+- **Jitter the intensities.** Add small random brightness/contrast changes to training
+  patches (augmentation beyond position).
+- **Change the objective.** Try **focal loss** or class weighting for imbalance, or
+  predict the **CDR grade** itself (ordinal / multi-class) or regress the **MMSE** score
+  instead of a single yes/no.
+- **Tune the training loop.** A cosine learning-rate schedule with warmup, or a different
+  batch size, can matter as much as the architecture.
+- **Ensemble the four designs.** Average 4a–4d's predictions — ensembles usually beat any
+  single member.
+- **Add early stopping.** Keep the *best-validation* checkpoint instead of the last epoch
+  (we noted validation peaks early, then drifts down).
+- **Look inside with Grad-CAM.** Visualize which pixels drove each prediction — a great
+  sanity check that the network is actually looking at the hippocampus and not a border
+  artifact.
+- **Feed it more data.** Add more `discs`, widen the cohort, or switch `balance` to
+  `none` — remembering that *effective* sample size is the number of subjects (§7).
+
+---
+
+## 14. Check your understanding
+
+1. Why do we need a **validation** set *and* a separate **test** set — what goes wrong
+   if we tune the model against the test set?
+2. Our data has 110 subjects with ~12 patches each. Is the effective amount of
+   independent data closer to 1,320 or 110? Why?
+3. A model scores **95 % accuracy** on a group that is 95 % healthy. Should you be
+   impressed? What single number would tell you more, and why?
+4. Designs **4a** and **4b** are the same network except 4a uses dropout and 4b uses
+   none. If 4b's *training* accuracy is higher but its *validation* accuracy is lower,
+   what does that tell you?
+5. Why do we crop the **hippocampus** specifically, instead of feeding the whole slice?
+6. Why must all patches from one person go into the **same** train/validate/test split?
+
+*(Answers are throughout the notes: §2, §7, §6, §7 & §9, §10, §10.)*
+
+---
+
+## 15. Glossary
+
+- **Voxel** — a 3-D pixel; here 1 voxel = 1 mm of brain.
+- **Slice / plane** — one flat 2-D cross-section of the 3-D brain.
+- **Patch** — the small cropped rectangle around one hippocampus that we feed the model.
+- **Label** — the correct answer (0 healthy / 1 demented), derived from the CDR.
+- **Parameter / weight** — an adjustable number inside the network; "learning" tunes these.
+- **Convolution / filter / channel** — a sliding pattern-detector; each filter's output
+  grid is a channel.
+- **Pooling** — shrinking the grid (we use 2×2 max-pooling).
+- **ReLU** — activation that zeroes negatives, keeps positives.
+- **Logit** — the network's single raw output; >0 means "predict demented."
+- **Loss** — a number measuring how wrong the predictions are (we minimize it).
+- **Epoch** — one full pass over the training data.
+- **Learning rate** — the size of each downhill step during training.
+- **Overfitting / underfitting** — memorizing quirks vs being too weak to learn at all.
+- **Dropout / weight decay / augmentation** — techniques that fight overfitting (dropout
+  is the main dial here — §9).
+- **Sensitivity / specificity / balanced accuracy** — honest performance metrics (§6).
+- **Data leakage** — accidentally letting test information influence training (e.g. the
+  same subject in two splits), which inflates scores dishonestly.
+
+---
+
+Back to the practical guide: **[readme.md](readme.md)**.
