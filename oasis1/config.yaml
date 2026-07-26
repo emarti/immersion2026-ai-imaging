@@ -101,6 +101,19 @@ epochs: 100              # training passes per design in step4 (a CLI --epochs o
 avg_last_epochs: 20      # step5 averages validation metrics over the last N epochs
 
 # ---------------------------------------------------------------------------
+# Grad-CAM interpretability (step6)
+# ---------------------------------------------------------------------------
+# step6 overlays a heatmap of WHERE a trained model looks to push a patch toward
+# "demented" (label 1). `model` names a checkpoint written by step4; the network
+# architecture is inferred from the file name (model_4a.pt -> design 4a).
+gradcam:
+  model: model_4a.pt      # which step4 checkpoint to explain (defaults to the 4a baseline)
+  split: validate         # patches to sample from: train | validate | test
+  n_samples: 12           # how many patches to visualize
+  seed: 0                 # sampling seed (reproducible)
+  overlay_alpha: 0.45     # heatmap opacity over the grayscale patch (0-1)
+
+# ---------------------------------------------------------------------------
 # Output artifact locations
 # ---------------------------------------------------------------------------
 # Not configured here: every artifact is derived from outputs_path by

@@ -31,7 +31,14 @@ All five pipeline steps are built and have been run end to end:
   all designs overlaid; also prints each
   design's mean validation acc/sens/spec/balanced-acc over the last 50 epochs, plus a
   by-AD-grade validation accuracy breakdown with per-grade subject counts).
-- Also: `process.sh` runs steps 1–5 (`bash process.sh`; `epochs` + `avg_last_epochs`
+- [x] **Step 6 — interpretability**: `step6-gradcam.py` → Grad-CAM heatmaps in
+  `outputs/gradcam/` (+ `gradcam_grid.png`). Loads a design's checkpoint
+  `outputs/model_4{a,b,c,d}.pt` (now saved by step4), hooks `Net.gap`, explains the
+  demented (label-1) logit. Cites Selvaraju et al. (ICCV 2017) / ramprs/grad-cam.
+- [x] **Step 7 — interpretability (forward)**: `step7-perturb.py` → minimal-perturbation
+  saliency in `outputs/perturb/` (+ `perturb_grid.png`). Gradient-free greedy L1-budget
+  counterfactual (config `perturb:`); reuses the step6 checkpoint-by-name convention.
+- Also: `process.sh` runs steps 1–7 (`bash process.sh`; `epochs` + `avg_last_epochs`
   live in `config.yaml`).
 
 ## The four designs (teaching sweep — sample three directions from a baseline)

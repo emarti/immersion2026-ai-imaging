@@ -626,15 +626,63 @@ by editing the `Net` class in a `step4?-train-network.py` file:*
   single member.
 - **Add early stopping.** Keep the *best-validation* checkpoint instead of the last epoch
   (we noted validation peaks early, then drifts down).
-- **Look inside with Grad-CAM.** Visualize which pixels drove each prediction — a great
-  sanity check that the network is actually looking at the hippocampus and not a border
-  artifact.
+- **Look inside with Grad-CAM** — *now implemented as `step6`* (see §14). It overlays a
+  heatmap of where the network looks; a great sanity check that it's reading the
+  hippocampus and not a border artifact.
 - **Feed it more data.** Add more `discs`, widen the cohort, or switch `balance` to
   `none` — remembering that *effective* sample size is the number of subjects (§7).
 
 ---
 
-## 14. Check your understanding
+## 14. Looking inside the model: Grad-CAM (step 6)
+
+A validation number tells you *how often* the model is right, not *why*. For a medical
+model that matters: is it reading the hippocampus, or has it latched onto a scanner
+artifact at the edge of the patch? **Grad-CAM** (Gradient-weighted Class Activation
+Mapping) is a simple way to look.
+
+This is our first step into **interpretability** — moving past *whether* the model is right
+to *what it is actually keying on*. Concretely, Grad-CAM answers: **which parts of this
+patch most steer the decision toward "demented" (label 1)?**
+
+**The idea.** Take the feature maps `Aₖ` from the **last convolution** — the grids fed
+into global average pooling (§4.7). Each lit up wherever some learned pattern was found.
+Grad-CAM asks: *how much does each map push the output toward the class I care about?* It
+measures that with the gradient — average `∂(score)/∂Aₖ` over the grid to get one weight
+`αₖ` per map — then forms a weighted sum and keeps only the positive part:
+
+> `heatmap = ReLU( Σₖ αₖ · Aₖ )`, then upsample to the patch size.
+
+The `ReLU` keeps regions that *raise* the score and drops those that lower it. We compute
+the score in the **demented (label 1)** direction (our single logit `z`), so **red = "this
+region pushes the patch toward *demented*."**
+
+> **Key idea — it explains a target you choose, not the truth.** Grad-CAM never looks at
+> the correct answer; *you* pick which output to explain. Because we always explain the
+> demented direction, the heatmap for a *healthy* patch shows **what would make it look
+> more demented** — not "why it's healthy." (Each panel is labelled with the true class
+> and the model's `P(dem)`, so you can tell which is which.)
+
+**A single-output wrinkle.** With one logit, "evidence for demented" and "evidence for
+healthy" are two sides of one coin: the healthy map is `ReLU(−Σₖ αₖ Aₖ)`. That's *almost*
+the negative of the demented map — but the `ReLU` keeps the opposite lobe, so the two maps
+are **complementary**, not a pure sign flip. (Drop the `ReLU` and show a signed map and
+they *are* exact negatives.)
+
+**Read it with humility.** The map lives at the last conv layer's resolution — here a
+coarse ~10×8 grid blown up to the whole patch — so it localizes *roughly*, not to the
+pixel. Treat it as a sanity check ("is attention on the hippocampus?"), not a segmentation.
+
+`step6-gradcam.py` loads a trained checkpoint (`model_4a.pt`, saved by step 4), runs a
+sample of patches, and writes the overlays to `outputs/gradcam/` (plus a montage).
+**Method:** Selvaraju et al., *"Grad-CAM: Visual Explanations from Deep Networks via
+Gradient-based Localization"* (ICCV 2017); our implementation is inspired by (not copied
+from) the original [ramprs/grad-cam](https://github.com/ramprs/grad-cam) and a
+[PyTorch backward-hook discussion](https://discuss.pytorch.org/t/grad-cam-implementation-in-pytorch-backward-on-model/3554/7).
+
+---
+
+## 15. Check your understanding
 
 1. Why do we need a **validation** set *and* a separate **test** set — what goes wrong
    if we tune the model against the test set?
@@ -652,7 +700,7 @@ by editing the `Net` class in a `step4?-train-network.py` file:*
 
 ---
 
-## 15. Glossary
+## 16. Glossary
 
 - **Voxel** — a 3-D pixel; here 1 voxel = 1 mm of brain.
 - **Slice / plane** — one flat 2-D cross-section of the 3-D brain.
@@ -673,6 +721,8 @@ by editing the `Net` class in a `step4?-train-network.py` file:*
 - **Sensitivity / specificity / balanced accuracy** — honest performance metrics (§6).
 - **Data leakage** — accidentally letting test information influence training (e.g. the
   same subject in two splits), which inflates scores dishonestly.
+- **Grad-CAM** — a heatmap of where the network looked to raise a chosen class score;
+  our sanity check that it reads the hippocampus (§14).
 
 ---
 

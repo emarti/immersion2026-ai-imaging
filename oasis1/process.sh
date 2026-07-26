@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Run the whole OASIS pipeline end to end:
-#   metadata -> cohort -> slices -> train the five CNN designs -> plot comparison.
+#   metadata -> cohort -> slices -> train the four CNN designs -> compare -> Grad-CAM.
 #
 # Activate the environment first so `python` is the oasis interpreter:
 #     mamba activate oasis
@@ -25,7 +25,7 @@ echo "== Step 3: generate slices =="
 rm -rf outputs/train outputs/validate outputs/test   # drop stale slices from prior offsets
 $PYTHON step3-generate-slices.py
 
-echo "== Step 4: train the five CNN designs (epochs from config.yaml) =="
+echo "== Step 4: train the four CNN designs (epochs from config.yaml) =="
 for design in a b c d; do
     echo "-- step4${design} --"
     $PYTHON "step4${design}-train-network.py"
@@ -34,4 +34,7 @@ done
 echo "== Step 5: plot the comparison =="
 $PYTHON step5-plot-training.py
 
-echo "== Done. See outputs/training_comparison.png =="
+echo "== Step 6: Grad-CAM heatmaps (baseline design 4a) =="
+$PYTHON step6-gradcam.py
+
+echo "== Done. See outputs/training_comparison.png and outputs/gradcam_grid.png =="

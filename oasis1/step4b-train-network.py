@@ -10,7 +10,8 @@ healthy=0) trained with BCEWithLogitsLoss + AdamW.
 
 Each epoch trains on the training split and evaluates on the validation split;
 per-epoch train/val loss and accuracy are written to
-``outputs/training_log_4b.csv``. step5 overlays the CSVs from all designs (4a-4d).
+``outputs/training_log_4b.csv``, and the final weights to ``outputs/model_4b.pt``
+(step6 reads them for Grad-CAM). step5 overlays the CSVs from all designs (4a-4d).
 
 This file is self-contained (the step4 designs differ only in ``Net``).
 
@@ -34,6 +35,7 @@ from torchvision import transforms
 from common import load_config, load_yaml, manifest_yaml
 
 CSV_NAME = "training_log_4b.csv"
+MODEL_NAME = "model_4b.pt"
 
 
 class OASISSlices(Dataset):
@@ -229,6 +231,9 @@ def main():
                     f"{history['val_cdr05'][i]:.6f},{history['val_cdr10'][i]:.6f},"
                     f"{history['val_cdr20'][i]:.6f}\n")
     print(f"Saved training log -> {log_path}")
+    model_path = os.path.join(outputs_path, MODEL_NAME)
+    torch.save(model.state_dict(), model_path)      # step6 (Grad-CAM) reloads this
+    print(f"Saved model weights -> {model_path}")
     elapsed = time.perf_counter() - start
     print(f"Run time: {elapsed:.1f} s "
           f"({epochs} epochs on {device}, {elapsed / epochs:.2f} s/epoch)")

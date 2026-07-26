@@ -14,9 +14,9 @@ The whole thing runs as five small Python scripts, in order. Each one reads a si
 settings file, **`config.yaml`**, and writes its results into an `outputs/` folder.
 
 ```
-raw brain scans ─▶ step1 ─▶ step2 ─▶ step3 ─▶ step4 ─▶ step5
-                  metadata  cohort   slice     train    compare
-                  .csv      splits   PNGs       curves   plot
+raw brain scans ─▶ step1 ─▶ step2 ─▶ step3 ─▶ step4 ─▶ step5 ─▶ step6
+                  metadata  cohort   slice     train    compare  Grad-CAM
+                  .csv      splits   PNGs       curves   plot     heatmaps
 ```
 
 ---
@@ -96,6 +96,7 @@ the config) and is safe to delete and regenerate.
 | 3 | `step3-generate-slices.py` | For each chosen subject, cuts 2-D **hippocampus patches** (left and right) out of the 3-D brain and saves them as PNG images. | `outputs/<split>/*.png` + `outputs/manifest.yaml` |
 | 4 | `step4a … step4d-train-network.py` | Trains **four different CNN designs**, each recording how well it does after every training pass. | `outputs/training_log_4{a,b,c,d}.csv` |
 | 5 | `step5-plot-training.py` | Draws all the designs' learning curves on one figure so you can compare them. | `outputs/training_comparison.png` |
+| 6 | `step6-gradcam.py` | **Grad-CAM**: overlays a heatmap on sample patches showing *where* a trained design looks to call one "demented". | `outputs/gradcam/` + `gradcam_grid.png` |
 
 **The "label"** (what we're trying to predict) comes from the **CDR** (Clinical
 Dementia Rating) in each session's text file: `CDR = 0` → healthy (`0`); `CDR = 0.5, 1,
@@ -121,6 +122,7 @@ python step4b-train-network.py   # 8-16-32, no dropout
 python step4c-train-network.py   # wider 16-32-64, dropout 0.6/0.2
 python step4d-train-network.py   # shallower 8-16 (2 blocks), dropout 0.6/0.2
 python step5-plot-training.py
+python step6-gradcam.py          # Grad-CAM heatmaps (needs a model_4?.pt from step4)
 ```
 
 (If you re-run step2 or step3 after changing the config, re-run step3 **and** the
@@ -263,6 +265,27 @@ avg_last_epochs: 20
   each design's validation summary (accuracy / sensitivity / specificity / balanced
   accuracy, and the by-grade breakdown).
 
+### 6.7 Grad-CAM (step 6)
+```yaml
+gradcam:
+  model: model_4a.pt      # which step4 checkpoint to explain
+  split: validate         # patches to sample from: train | validate | test
+  n_samples: 12           # how many patches to visualize
+  seed: 0                 # sampling seed (reproducible)
+  overlay_alpha: 0.45     # heatmap opacity over the grayscale patch (0-1)
+```
+Step 6 draws heatmaps of **where** a trained model looks to push a patch toward "demented".
+- **`model`** — the checkpoint (written by step 4) to explain. Name the file directly; the
+  network shape is **inferred** from it (`model_4a.pt` → the 4a design), so you don't pass
+  a design letter. Defaults to the 4a baseline.
+- **`split`** — which split to sample patches from (`validate` by default).
+- **`n_samples`** — how many patches to show (a montage plus one PNG each).
+- **`seed`** — makes the random sample of patches repeatable.
+- **`overlay_alpha`** — how opaque the colored heatmap is over the grayscale patch.
+
+Any of these can be overridden on the command line, e.g.
+`python step6-gradcam.py --model model_4c.pt --split test --n 16`.
+
 ---
 
 ## 7. What the pipeline produces (files & formats)
@@ -285,6 +308,10 @@ All under `outputs/`:
   validation accuracy `val_acc_cdr05, val_acc_cdr10, val_acc_cdr20`.
 - **`training_comparison.png`** — all designs' curves overlaid in four panels
   (training loss/accuracy on top, validation accuracy and balanced accuracy below).
+- **`model_4{a,b,c,d}.pt`** — each design's trained weights (a PyTorch `state_dict`),
+  saved by step 4 so step 6 can reload them without retraining.
+- **`gradcam/`** + **`gradcam_grid.png`** — step 6's Grad-CAM overlays: one PNG per
+  sampled patch, plus a montage.
 
 ### Reading the training logs
 Each **epoch** is one full pass over the training images. For each we record, on both
@@ -310,6 +337,22 @@ shows how well each grade is caught — you'd expect more-severe (more atrophied
 be easier. It prints the patch/subject count per grade too, because those counts are
 **small** (only a handful of validation subjects per grade), so treat the numbers as
 trends, not precise figures.
+
+### Reading the Grad-CAM heatmaps
+step 6 overlays a **Grad-CAM** heatmap on a sample of patches (default: 12 validation
+patches, baseline design `4a`). Red marks the regions that most **raise the "demented"
+score** — i.e. *what pushes this patch toward label 1*. Two things to keep in mind:
+
+- **It explains a chosen target, not the truth.** We always explain the demented
+  direction, so even a *healthy* patch's map shows "what would make it look demented," not
+  "why it's healthy." Each panel's title gives the true label and the model's `P(dem)`.
+- **It's coarse.** The map comes from the last conv layer (a ~10×8 grid here), upsampled —
+  so it localizes roughly, not to the pixel. Use it as a sanity check ("is the network
+  looking at the hippocampus, or at a border artifact?"), not a precise segmentation.
+
+Point step 6 at another model or split via `config.yaml` (`gradcam:`) or the command line,
+e.g. `--model model_4c.pt --split test --n 16`. Method + citation are in
+[introduction.md](introduction.md).
 
 ---
 
