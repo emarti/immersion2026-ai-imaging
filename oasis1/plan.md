@@ -7,7 +7,8 @@ status/decisions tracker; see **readme.md** (how to run + config reference) and
 
 ## Progress
 
-All five pipeline steps are built and have been run end to end:
+The pipeline (steps 1–6) is built and has been run end to end. Step 7 exists as a
+standalone extra (not wired into `process.sh`, `config.yaml`, or the main docs).
 
 - [x] **Step 0 — config**: `config.yaml`, `requirements.txt`, `common.py`, `.env`/`.env.example`.
 - [x] **Step 1 — gather metadata**: `step1-gather-metadata.py` → `outputs/metadata.csv`
@@ -32,13 +33,18 @@ All five pipeline steps are built and have been run end to end:
   design's mean validation acc/sens/spec/balanced-acc over the last 50 epochs, plus a
   by-AD-grade validation accuracy breakdown with per-grade subject counts).
 - [x] **Step 6 — interpretability**: `step6-gradcam.py` → Grad-CAM heatmaps in
-  `outputs/gradcam/` (+ `gradcam_grid.png`). Loads a design's checkpoint
-  `outputs/model_4{a,b,c,d}.pt` (now saved by step4), hooks `Net.gap`, explains the
-  demented (label-1) logit. Cites Selvaraju et al. (ICCV 2017) / ramprs/grad-cam.
-- [x] **Step 7 — interpretability (forward)**: `step7-perturb.py` → minimal-perturbation
-  saliency in `outputs/perturb/` (+ `perturb_grid.png`). Gradient-free greedy L1-budget
-  counterfactual (config `perturb:`); reuses the step6 checkpoint-by-name convention.
-- Also: `process.sh` runs steps 1–7 (`bash process.sh`; `epochs` + `avg_last_epochs`
+  `outputs/gradcam/` (+ `gradcam_grid.png`) plus per-subject whole-slice context overlays
+  in `outputs/gradcam_context/` (heatmaps redrawn on the full axial slice). Loads a design's
+  checkpoint `outputs/model_4{a,b,c,d}.pt` (now saved by step4), hooks `Net.gap`, and shows
+  **both** push directions side by side (demented in the `jet` colormap, healthy in a
+  distinct `cool`), with truth-coloured titles (red demented / blue healthy). Cites
+  Selvaraju et al. (ICCV 2017) / ramprs/grad-cam.
+- [x] **Step 7 — interpretability (forward), STANDALONE**: `step7-perturb.py` →
+  minimal-perturbation saliency in `outputs/perturb/` (+ `perturb_grid.png`). Gradient-free
+  greedy L1-budget counterfactual; reuses the step6 checkpoint-by-name convention. Kept as an
+  optional extra — **not** run by `process.sh`, and deliberately left out of `config.yaml` and
+  the reader-facing docs (readme/introduction) as of the "up to step 6" commit.
+- Also: `process.sh` runs steps 1–6 (`bash process.sh`; `epochs` + `avg_last_epochs`
   live in `config.yaml`).
 
 ## The four designs (teaching sweep — sample three directions from a baseline)
@@ -72,10 +78,18 @@ optimization sweeps are logged in `lab-notes.md`.)
 - Direction that helped: hippocampus ROI focus, more subjects (`label` balancing),
   lower learning rate (1e-4). Realistic target ≈ **0.78 balanced accuracy** — the DL4MI
   tutorial's hippocampus CNN in ~30 epochs (≈0.81 with left+right voting).
+- Best observed so far: **4c ≈ 0.777** balanced acc (lab-notes Run 3, reproduced in Run 5).
+  Results are noisy (~±0.1 on a ~16-subject val set) and sensitive to crop/random-shift
+  choices — real risk of validation overfitting from repeated tweaks. See `lab-notes.md`.
+- **Age confound**: a low `age_min` lets the model exploit age rather than pathology.
+  Raising `age_min` to 70 age-matches the cohort but shrinks it — accuracy collapses toward
+  chance (Run 7 ≈ 0.53–0.60). The current `age_min: 60` is more accurate but biased; this is
+  a documented, intentional trade-off.
+- **Augmentation (`apply_random_shifts`)**: measured — greatly increases training time and
+  favors smaller models, but does **not** appreciably improve validation accuracy here.
 
 ## TODO / next
 
-- Turn on `apply_random_shifts` and measure the effect.
 - Add early stopping / report the best-validation epoch (not the last).
 - Left + right soft-voting to one prediction per subject (like the tutorial).
 - To chase the tutorial's numbers: heavier preprocessing (grey-matter segmentation) or

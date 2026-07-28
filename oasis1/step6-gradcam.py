@@ -1,26 +1,29 @@
 #!/usr/bin/env python3
-"""Step 6: Grad-CAM heatmaps -- see WHERE the network looks to call a patch "demented".
+"""Step 6: Grad-CAM heatmaps -- see WHERE the network looks, in BOTH directions.
 
 Grad-CAM (Gradient-weighted Class Activation Mapping) highlights the regions of an input
-that most raise a chosen output score. We compute it for the **demented (label 1)**
-direction -- i.e. the raw logit z -- so every heatmap answers the same question: "what in
-this hippocampus patch pushes the model toward 'demented'?" The map is
+that most raise a chosen output score. From one backward pass we build a signed importance
+map ``raw = sum_k alpha_k * A_k`` (alpha_k = mean over space of dz/dA_k; A_k = the last conv
+feature maps fed to global-average pooling), and show BOTH of its lobes side by side:
 
-    L = ReLU( sum_k alpha_k * A_k ),   alpha_k = mean over space of  dz/dA_k
+    demented map = ReLU(+raw)   ('jet'):   what pushes this patch toward 'demented'
+    healthy  map = ReLU(-raw)   ('cool'):  what pushes it toward 'healthy'
 
-where the ``A_k`` are the last conv feature maps (the tensor fed to global-average
-pooling). Because we have a single output node, the label-0 map is
-``ReLU(-sum_k alpha_k A_k)`` -- the *complementary* lobe (the ReLU makes it NOT a pure
-sign flip of the label-1 map).
-
-Grad-CAM explains the *target class you choose*, not the ground truth: a heatmap for a
-truly-healthy patch still shows "what would make it look more like label 1".
+The two are *complementary* -- disjoint lobes of the same signed map -- so they look quite
+different; that is expected, not a bug. Grad-CAM explains a target you choose, not the
+ground truth (a healthy patch's demented map still shows "what would make it look demented").
 
 Method: Selvaraju et al., "Grad-CAM: Visual Explanations from Deep Networks via
 Gradient-based Localization", ICCV 2017. Structurally inspired by (not copied from) the
 original Torch implementation https://github.com/ramprs/grad-cam and the PyTorch
 backward-hook approach discussed at
 https://discuss.pytorch.org/t/grad-cam-implementation-in-pytorch-backward-on-model/3554/7
+
+This step writes two views: (1) a montage ``gradcam_grid.png`` (plus per-patch overlays in
+``outputs/gradcam/``) over a sample of patches; and (2) per-subject **whole-slice context**
+overlays in ``outputs/gradcam_context/`` -- the same heatmaps drawn back onto the full axial
+slice at the left/right hippocampus crop boxes. The context pass reloads the raw volume, so
+it needs the raw data (``DATA_RAW_PATH``).
 
 Needs a trained checkpoint from step4 (``outputs/model_4{design}.pt``); reads the same
 ``config.yaml`` / ``manifest.yaml`` as the rest of the pipeline.
@@ -60,12 +63,35 @@ def load_design_net(design: str):
     return module.Net
 
 
-def grad_cam(model, x):
-    """Grad-CAM map for the demented (label 1) logit of one patch.
+def _load_step3():
+    """Import step3's slice helpers (load_volume/normalize_volume/extract_slice) to reuse,
+    so the reloaded whole-slice crops are bit-for-bit the validated PNGs."""
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "step3-generate-slices.py")
+    spec = importlib.util.spec_from_file_location("step3_generate_slices", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
-    ``x`` is a 1x1xHxW tensor. Returns ``(cam, logit)`` where ``cam`` is an HxW float32
-    array in [0,1]. Hooks ``model.gap`` -- present in every design -- to grab the feature
-    map ``A`` that GAP pools and its gradient ``dz/dA``.
+
+def _finish(cam2d, h, w):
+    """A ReLU'd map -> min-max normalized [0,1] float array, upsampled to (h, w)."""
+    cam = cam2d.detach()
+    cam = cam - cam.min()
+    peak = cam.max()
+    if peak > 0:
+        cam = cam / peak
+    cam = F.interpolate(cam[None, None], size=(h, w), mode="bilinear",
+                        align_corners=False)[0, 0]
+    return cam.cpu().numpy().astype(np.float32)
+
+
+def grad_cam(model, x):
+    """Grad-CAM for BOTH directions of one patch, from a single backward pass.
+
+    ``x`` is a 1x1xHxW tensor. Returns ``(cam_dem, cam_hlt, logit)``: the demented map
+    ``ReLU(+raw)`` and the healthy map ``ReLU(-raw)`` where ``raw = sum_k alpha_k A_k`` is
+    the signed importance map. The two are complementary (disjoint lobes of one map). Hooks
+    ``model.gap`` -- present in every design -- to grab the feature map ``A`` and ``dz/dA``.
     """
     captured = {}
 
@@ -77,23 +103,18 @@ def grad_cam(model, x):
     handle = model.gap.register_forward_hook(fwd_hook)
     try:
         model.zero_grad(set_to_none=True)
-        z = model(x).squeeze()          # scalar logit; target = the demented direction
+        z = model(x).squeeze()          # scalar logit z (P(dem) = sigmoid(z))
         z.backward()
         A = captured["A"]               # 1 x C x h x w  (activations)
         alpha = A.grad.mean(dim=(2, 3), keepdim=True)   # 1 x C x 1 x 1  (channel weights)
-        cam = F.relu((alpha * A).sum(dim=1))[0]         # h x w
+        raw = (alpha * A).sum(dim=1)[0]                 # h x w  (signed importance map)
     finally:
         handle.remove()
 
-    cam = cam.detach()
-    cam = cam - cam.min()
-    peak = cam.max()
-    if peak > 0:
-        cam = cam / peak                                # normalize to [0,1]
     h, w = x.shape[-2:]
-    cam = F.interpolate(cam[None, None], size=(h, w), mode="bilinear",
-                        align_corners=False)[0, 0]      # upsample to the patch size
-    return cam.cpu().numpy().astype(np.float32), float(z.detach())
+    cam_dem = _finish(F.relu(raw), h, w)                # pushes toward demented  (ReLU(+raw))
+    cam_hlt = _finish(F.relu(-raw), h, w)               # pushes toward healthy   (ReLU(-raw))
+    return cam_dem, cam_hlt, float(z.detach())
 
 
 def pick_rows(rows, n, seed):
@@ -118,6 +139,31 @@ def panel_title(row, prob):
     true = int(row["label"])
     return (f"{row['subject']} {row['side']}\n"
             f"true={'dem' if true else 'hlth'}  P(dem)={prob:.2f}")
+
+
+def sigmoid(z):
+    return float(1.0 / (1.0 + np.exp(-z)))
+
+
+def hippocampus_boxes(a0, a1, l0, l1, width):
+    """(row0, row1, col0, col1) crop boxes for the left and right hippocampus.
+
+    Matches step3: the left box is ``lr_left``; the right box is it mirrored about the L-R
+    centre of a slice ``width`` wide.
+    """
+    return {"L": (a0, a1, l0, l1), "R": (a0, a1, width - l1, width - l0)}
+
+
+# Heatmap colormaps: the classic 'jet' for the demented direction (as before), and a
+# distinct 'cool' (cyan->magenta) for healthy, so the two direction panels are easy to tell
+# apart. (The panel TITLE colour, separately, encodes the truth: red demented / blue healthy.)
+CMAP_DEMENTED = "jet"
+CMAP_HEALTHY = "cool"
+
+
+def truth_color(true):
+    """Colour for a true label: red = demented (1), blue = healthy (0)."""
+    return "red" if int(true) else "blue"
 
 
 def main():
@@ -163,53 +209,125 @@ def main():
     model.eval()                                  # dropout off, BN in eval -> deterministic
 
     manifest = load_yaml(manifest_yaml(config))
-    rows = [r for r in manifest["slices"] if r["split"] == split]
-    if not rows:
+    split_rows = [r for r in manifest["slices"] if r["split"] == split]
+    if not split_rows:
         raise SystemExit(f"No patches for split '{split}' in the manifest.")
-    rows = pick_rows(rows, n, seed)
+    rows = pick_rows(split_rows, n, seed)
 
     out_dir = os.path.join(outputs_path, "gradcam")
     os.makedirs(out_dir, exist_ok=True)
 
-    panels = []
+    panels = []                              # (gray, cam_hlt, cam_dem, title, colour)
     for row in rows:
         gray = np.asarray(Image.open(os.path.join(outputs_path, row["png_path"])),
                           dtype=np.float32) / 255.0             # H x W in [0,1]
         x = torch.from_numpy(gray)[None, None]                  # 1 x 1 x H x W (matches ToTensor)
-        cam, logit = grad_cam(model, x)
-        prob = float(1.0 / (1.0 + np.exp(-logit)))              # sigmoid -> P(demented)
-        title = panel_title(row, prob)
+        cam_dem, cam_hlt, logit = grad_cam(model, x)
+        title = panel_title(row, sigmoid(logit))
+        colour = truth_color(int(row["label"]))
 
-        fig, ax = plt.subplots(figsize=(2.4, 2.8))
-        ax.imshow(gray, cmap="gray")
-        ax.imshow(cam, cmap="jet", alpha=alpha)            # red = raises demented score
-        ax.set_axis_off()
-        ax.set_title(title, fontsize=8)
+        # Two panels: left = pushes toward healthy (blue), right = pushes toward demented (red).
+        fig, axs = plt.subplots(1, 2, figsize=(4.6, 2.9))
+        for ax, cam, cmap, name in ((axs[0], cam_hlt, CMAP_HEALTHY, "push -> healthy"),
+                                    (axs[1], cam_dem, CMAP_DEMENTED, "push -> demented")):
+            ax.imshow(gray, cmap="gray")
+            ax.imshow(cam, cmap=cmap, alpha=alpha, vmin=0.0, vmax=1.0)
+            ax.set_axis_off()
+            ax.set_title(name, fontsize=8)
+        fig.suptitle(title, fontsize=8, color=colour)
         fig.tight_layout()
         fname = f"gradcam_4{design}_{row['subject']}_{row['side']}_lbl{int(row['label'])}.png"
         fig.savefig(os.path.join(out_dir, fname), dpi=120, bbox_inches="tight")
         plt.close(fig)
-        panels.append((gray, cam, title))
+        panels.append((gray, cam_hlt, cam_dem, title, colour))
 
-    # Montage of every panel.
+    # Montage: one row per patch -- col 0 = push->healthy (blue), col 1 = push->demented (red).
     k = len(panels)
-    cols = min(4, k)
-    nrows = (k + cols - 1) // cols
-    fig, axes = plt.subplots(nrows, cols, figsize=(3 * cols, 3.2 * nrows), squeeze=False)
+    fig, axes = plt.subplots(k, 2, figsize=(5.2, 2.6 * k), squeeze=False)
     for ax in axes.flat:
         ax.set_axis_off()
-    for (gray, cam, title), ax in zip(panels, axes.flat):
-        ax.imshow(gray, cmap="gray")
-        ax.imshow(cam, cmap="jet", alpha=alpha)
-        ax.set_title(title, fontsize=8)
-    fig.suptitle(f"Grad-CAM (design 4{design}) -- red = pushes toward 'demented'", fontsize=11)
+    for (gray, cam_hlt, cam_dem, title, colour), (ax_h, ax_d) in zip(panels, axes):
+        for ax, cam, cmap in ((ax_h, cam_hlt, CMAP_HEALTHY), (ax_d, cam_dem, CMAP_DEMENTED)):
+            ax.imshow(gray, cmap="gray")
+            ax.imshow(cam, cmap=cmap, alpha=alpha, vmin=0.0, vmax=1.0)
+        ax_h.set_title(title, fontsize=7, color=colour, loc="left")
+    fig.suptitle(f"Grad-CAM (design 4{design})    "
+                 f"left/blue = pushes toward HEALTHY    ·    right/red = pushes toward DEMENTED",
+                 fontsize=10)
     fig.tight_layout()
     grid_path = os.path.join(outputs_path, "gradcam_grid.png")
     fig.savefig(grid_path, dpi=120)
     plt.close(fig)
 
-    print(f"Saved {k} Grad-CAM overlays -> {out_dir}/")
+    print(f"Saved {k} Grad-CAM overlays (both directions) -> {out_dir}/")
     print(f"Saved montage -> {grid_path}")
+
+    # --- Whole-slice context: draw each subject's L/R heatmaps back onto the full axial
+    # slice, reloaded from the raw volume (identical to the validated crops). ---
+    from matplotlib.patches import Rectangle
+    step3 = _load_step3()
+    axis = config["slices"]["slice_axis"]
+    hcfg = config["hippocampus"]
+    a0, a1 = hcfg["ap"]
+    l0, l1 = hcfg["lr_left"]
+    data_raw = config["data_raw_path"]
+
+    ctx_dir = os.path.join(outputs_path, "gradcam_context")
+    os.makedirs(ctx_dir, exist_ok=True)
+
+    subjects = {}                       # one entry per subject (L/R share img/slice/label)
+    for r in split_rows:
+        subjects.setdefault(r["subject"], r)
+    subjects = list(subjects.values())
+    print(f"Whole-slice context: {len(subjects)} '{split}' subject(s) -> {ctx_dir}/")
+
+    ctx_saved = 0
+    for i, r in enumerate(subjects, 1):
+        subject = r["subject"]
+        true = int(r["label"])
+        idx = int(r["slice_index"])
+        img_abs = os.path.join(data_raw, r["img_path"])
+        if not os.path.isfile(img_abs):
+            print(f"  [skip] missing volume for {subject}: {img_abs}")
+            continue
+        sl = step3.extract_slice(step3.normalize_volume(step3.load_volume(img_abs)), axis, idx)
+        H, W = sl.shape
+        boxes = hippocampus_boxes(a0, a1, l0, l1, W)
+
+        # Per side, compute both direction maps.
+        dem, hlt, probs = {}, {}, {}
+        for side, (r0, r1, c0, c1) in boxes.items():
+            crop = sl[r0:r1, c0:c1].astype(np.float32) / 255.0        # == the validated PNG
+            cam_dem, cam_hlt, logit = grad_cam(model, torch.from_numpy(crop)[None, None])
+            dem[side], hlt[side] = cam_dem, cam_hlt
+            probs[side] = sigmoid(logit)
+
+        # Two panels: left = pushes toward healthy (blue), right = pushes toward demented (red).
+        fig, axs = plt.subplots(1, 2, figsize=(9.2, 5.4))
+        for ax, cams, cmap, name in ((axs[0], hlt, CMAP_HEALTHY, "push -> healthy"),
+                                     (axs[1], dem, CMAP_DEMENTED, "push -> demented")):
+            ax.imshow(sl, cmap="gray", vmin=0, vmax=255)
+            for side, (r0, r1, c0, c1) in boxes.items():
+                # origin='upper' default: extent = (left, right, bottom, top) = (c0, c1, r1, r0)
+                ax.imshow(cams[side], cmap=cmap, alpha=alpha, vmin=0.0, vmax=1.0,
+                          extent=(c0, c1, r1, r0))
+                ax.add_patch(Rectangle((c0, r0), c1 - c0, r1 - r0, edgecolor="lime",
+                                       facecolor="none", linewidth=1.0))
+            ax.set_xlim(0, W)
+            ax.set_ylim(H, 0)
+            ax.set_axis_off()
+            ax.set_title(name, fontsize=10)
+        fig.suptitle(f"{subject}   true = {'demented' if true else 'healthy'}   "
+                     f"P(dem)  L = {probs['L']:.2f}   R = {probs['R']:.2f}",
+                     fontsize=11, color=truth_color(true))
+        fig.tight_layout()
+        out = os.path.join(ctx_dir, f"gradcam_ctx_4{design}_{subject}.png")
+        fig.savefig(out, dpi=130, bbox_inches="tight")
+        plt.close(fig)
+        ctx_saved += 1
+        print(f"  [{i}/{len(subjects)}] {subject}  P(dem) L={probs['L']:.2f} R={probs['R']:.2f}")
+
+    print(f"Saved {ctx_saved} context overlay(s) -> {ctx_dir}/")
 
 
 if __name__ == "__main__":

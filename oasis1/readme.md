@@ -310,8 +310,12 @@ All under `outputs/`:
   (training loss/accuracy on top, validation accuracy and balanced accuracy below).
 - **`model_4{a,b,c,d}.pt`** — each design's trained weights (a PyTorch `state_dict`),
   saved by step 4 so step 6 can reload them without retraining.
-- **`gradcam/`** + **`gradcam_grid.png`** — step 6's Grad-CAM overlays: one PNG per
-  sampled patch, plus a montage.
+- **`gradcam/`** + **`gradcam_grid.png`** — step 6's Grad-CAM overlays: per patch, **two
+  panels** (push-toward-healthy and push-toward-demented, in two distinct colormaps), plus a
+  montage of all sampled patches.
+- **`gradcam_context/`** — step 6's whole-slice overlays: one PNG per subject, **two
+  side-by-side full axial slices** (healthy | demented) with the L/R hippocampus heatmaps
+  drawn at their crop boxes (this pass reloads the raw volume).
 
 ### Reading the training logs
 Each **epoch** is one full pass over the training images. For each we record, on both
@@ -339,16 +343,26 @@ be easier. It prints the patch/subject count per grade too, because those counts
 trends, not precise figures.
 
 ### Reading the Grad-CAM heatmaps
-step 6 overlays a **Grad-CAM** heatmap on a sample of patches (default: 12 validation
-patches, baseline design `4a`). Red marks the regions that most **raise the "demented"
-score** — i.e. *what pushes this patch toward label 1*. Two things to keep in mind:
+step 6 shows, for each patch, **two panels**: **left = "pushes toward healthy"** and
+**right = "pushes toward demented"**, in two distinct colormaps (`jet` for demented, `cool`
+for healthy) so you can tell them apart — each highlighting where changing the image would
+move the score that way. Three things to keep in mind:
 
-- **It explains a chosen target, not the truth.** We always explain the demented
-  direction, so even a *healthy* patch's map shows "what would make it look demented," not
-  "why it's healthy." Each panel's title gives the true label and the model's `P(dem)`.
+- **The two directions are complementary, not opposites.** With one output, the demented map
+  is `ReLU(+importance)` and the healthy map is `ReLU(−importance)` — the same signed map
+  split into its positive and negative lobes — so they light up *different* regions. Looking
+  quite different is expected (see [introduction.md](introduction.md) §14).
+- **It explains a chosen target, not the truth.** A *healthy* patch's demented panel still
+  shows "what would make it look demented." The panel **title** is colored by the true label
+  — **blue = healthy, red = demented** — next to the model's `P(dem)`.
 - **It's coarse.** The map comes from the last conv layer (a ~10×8 grid here), upsampled —
   so it localizes roughly, not to the pixel. Use it as a sanity check ("is the network
   looking at the hippocampus, or at a border artifact?"), not a precise segmentation.
+
+step 6 also writes **whole-slice context** overlays to `outputs/gradcam_context/` (one per
+subject): two side-by-side full axial slices (healthy | demented) with the L/R heatmaps drawn
+at their crop boxes, so you can see *where in the brain* the model finds each kind of
+evidence. That pass reloads the raw volume, so it needs `DATA_RAW_PATH` set.
 
 Point step 6 at another model or split via `config.yaml` (`gradcam:`) or the command line,
 e.g. `--model model_4c.pt --split test --n 16`. Method + citation are in

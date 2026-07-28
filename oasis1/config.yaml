@@ -70,10 +70,8 @@ slices:
 # mirrored about the L-R centre. The patch is intentionally LARGER than the
 # hippocampus so step4 can random-crop within it later.
 hippocampus:
-  ap: [74, 154]            # A-P rows  -> 76 px tall
-  lr_left: [88, 152]       # L-R cols for the LEFT hippocampus  -> 60 px wide
-  # ap: [76, 152]            # A-P rows  -> 76 px tall
-  # lr_left: [90, 150]       # L-R cols for the LEFT hippocampus  -> 60 px wide
+  ap: [76, 152]            # A-P rows  -> 76 px tall
+  lr_left: [90, 150]       # L-R cols for the LEFT hippocampus  -> 60 px wide
   # Training-only random-shift augmentation (tutorial's CropLeftHC(random_shift)):
   # when `apply_random_shifts` is true, each TRAIN patch is duplicated n_shifts times,
   # each cropped at a random (dx,dy) in [-random_shift, random_shift] voxels. When
@@ -81,7 +79,7 @@ hippocampus:
   # never shift. random_shift=2 -> (2*2+1)^2 = 25 possible shifts; n_shifts=8 samples 8.
   # (1 mm voxels here, so +/-2 = +/-2 mm; use 3 to match the tutorial's +/-3 mm.)
   apply_random_shifts: true
-  random_shift: 4
+  random_shift: 3
   n_shifts: 10
 
 # ---------------------------------------------------------------------------

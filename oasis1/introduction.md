@@ -653,28 +653,36 @@ measures that with the gradient — average `∂(score)/∂Aₖ` over the grid t
 
 > `heatmap = ReLU( Σₖ αₖ · Aₖ )`, then upsample to the patch size.
 
-The `ReLU` keeps regions that *raise* the score and drops those that lower it. We compute
-the score in the **demented (label 1)** direction (our single logit `z`), so **red = "this
-region pushes the patch toward *demented*."**
+The `ReLU` keeps regions that *raise* the score and drops those that lower it. step 6 shows
+**both** directions side by side, in two distinct colormaps: the **demented** map
+`ReLU(+Σₖ αₖ Aₖ)` (the `jet` colormap, "what pushes this patch toward demented") and the
+**healthy** map `ReLU(−Σₖ αₖ Aₖ)` (a distinct `cool` colormap, "what pushes it toward
+healthy").
 
-> **Key idea — it explains a target you choose, not the truth.** Grad-CAM never looks at
-> the correct answer; *you* pick which output to explain. Because we always explain the
-> demented direction, the heatmap for a *healthy* patch shows **what would make it look
-> more demented** — not "why it's healthy." (Each panel is labelled with the true class
-> and the model's `P(dem)`, so you can tell which is which.)
+> **Key idea — each map explains a target you choose, not the truth.** Grad-CAM never looks
+> at the correct answer; *you* pick which output to explain. So the demented map for a
+> *healthy* patch shows **what would make it look more demented** — not "why it's healthy"
+> (the healthy map answers that). Panel titles carry the true class, coloured **blue =
+> healthy, red = demented**, next to the model's `P(dem)`.
 
 **A single-output wrinkle.** With one logit, "evidence for demented" and "evidence for
 healthy" are two sides of one coin: the healthy map is `ReLU(−Σₖ αₖ Aₖ)`. That's *almost*
 the negative of the demented map — but the `ReLU` keeps the opposite lobe, so the two maps
 are **complementary**, not a pure sign flip. (Drop the `ReLU` and show a signed map and
-they *are* exact negatives.)
+they *are* exact negatives.) That is why the two panels usually light up *different*
+regions: the demented (`jet`) panel shows where the demented-evidence sits, the healthy
+(`cool`) panel where the healthy-evidence sits. If they looked identical, something would be
+wrong — step 6 renders them as a pair precisely so you can read one against the other.
 
 **Read it with humility.** The map lives at the last conv layer's resolution — here a
 coarse ~10×8 grid blown up to the whole patch — so it localizes *roughly*, not to the
 pixel. Treat it as a sanity check ("is attention on the hippocampus?"), not a segmentation.
 
 `step6-gradcam.py` loads a trained checkpoint (`model_4a.pt`, saved by step 4), runs a
-sample of patches, and writes the overlays to `outputs/gradcam/` (plus a montage).
+sample of patches, and writes **two-panel** overlays (healthy | demented, in two distinct
+colormaps) to `outputs/gradcam/` plus a montage. It also redraws each subject's L/R heatmaps back onto the
+full axial slice as a healthy-vs-demented pair (`outputs/gradcam_context/`), so you can see
+where in the brain each kind of evidence sits.
 **Method:** Selvaraju et al., *"Grad-CAM: Visual Explanations from Deep Networks via
 Gradient-based Localization"* (ICCV 2017); our implementation is inspired by (not copied
 from) the original [ramprs/grad-cam](https://github.com/ramprs/grad-cam) and a
