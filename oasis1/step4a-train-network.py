@@ -5,7 +5,7 @@ Design 4a -- three conv blocks 1 -> 8 -> 16 -> 32 with moderate dropout (0.6 / 0
 This is the shared baseline that designs 4b-4e each change in exactly ONE way (dropout,
 width, or depth), so comparing any of them against 4a isolates a single effect. Each
 block is Conv(3x3, pad 1) -> BatchNorm -> ReLU -> MaxPool(2), then global average
-pooling and a small 2-layer classifier. Binary output (demented=1 vs healthy=0) trained
+pooling and a small 2-layer classifier. Binary output (CDR-positive=1 vs CDR-negative=0) trained
 with BCEWithLogitsLoss + AdamW.
 
 Each epoch trains on the training split and evaluates on the validation split;
@@ -54,7 +54,7 @@ class OASISSlices(Dataset):
         img = Image.open(os.path.join(self.outputs_path, row["png_path"]))
         x = self.transform(img)                                   # 1 x H x W
         y = torch.tensor(float(row["label"]), dtype=torch.float32)
-        cdr = torch.tensor(float(row["cdr"]), dtype=torch.float32)   # AD grade of this patch
+        cdr = torch.tensor(float(row["cdr"]), dtype=torch.float32)   # CDR grade of this patch
         return x, y, cdr
 
 
@@ -108,15 +108,15 @@ def train(model, device, train_loader, optimizer):
     return loss_sum / n, correct / n
 
 
-GRADES = (0.5, 1.0, 2.0)   # demented CDR severities pooled under label 1
+GRADES = (0.5, 1.0, 2.0)   # CDR-positive severities pooled under label 1
 
 
 def evaluate(model, device, loader):
     """Evaluate (no training); return loss, accuracy, sensitivity, specificity, and
-    a per-CDR-grade accuracy dict for the demented grades 0.5 / 1 / 2.
+    a per-CDR-grade accuracy dict for the CDR-positive grades 0.5 / 1 / 2.
 
-    Positive class = demented (label 1). sensitivity = TP/(TP+FN) (recall of
-    demented), specificity = TN/(TN+FP) (recall of healthy). Per-grade accuracy is
+    Positive class = CDR-positive (label 1). sensitivity = TP/(TP+FN) (recall of
+    CDR-positive), specificity = TN/(TN+FP) (recall of CDR-negative). Per-grade accuracy is
     the recall within that grade (all its patches are label 1); nan if the grade has
     no patches in this split.
     """

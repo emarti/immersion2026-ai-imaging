@@ -8,8 +8,8 @@ epoch -- so the designs can be compared. The validation-accuracy panel also draw
 running average (a smoothed line over the noisy raw curve) to show the trend. Saves
 ``outputs/training_comparison.png``. Also prints each design's average validation
 accuracy / sensitivity / specificity / balanced accuracy over the last 50 epochs,
-plus a breakdown of validation accuracy by AD severity (the CDR grades 0.5 / 1 / 2
-pooled under label 1). Designs that haven't been run yet are simply skipped.
+plus a breakdown of validation accuracy by CDR grade (0.5 / 1 / 2, pooled under
+label 1). Designs that haven't been run yet are simply skipped.
 
 Usage:
     python step5-plot-training.py
@@ -34,7 +34,7 @@ NUMERIC_COLS = ("train_loss", "train_acc", "val_loss", "val_acc",
                 "val_sens", "val_spec", "val_bal_acc",
                 "val_acc_cdr05", "val_acc_cdr10", "val_acc_cdr20")
 
-# demented CDR grade -> (its log column, a human label)
+# CDR-positive grade -> (its log column, a human label)
 GRADE_INFO = [
     (0.5, "val_acc_cdr05", "CDR 0.5 (very mild)"),
     (1.0, "val_acc_cdr10", "CDR 1 (mild)"),
@@ -79,7 +79,7 @@ def running_mean(values, window=SMOOTH_WINDOW):
 
 
 def val_grade_counts(manifest_path):
-    """Per demented CDR grade, how many validation patches / subjects there are."""
+    """Per CDR-positive grade, how many validation patches / subjects there are."""
     counts = {g: {"patches": 0, "subjects": set()} for g, _, _ in GRADE_INFO}
     if os.path.isfile(manifest_path):
         for r in load_yaml(manifest_path).get("slices", []):
@@ -144,11 +144,11 @@ def main():
         bal = tail_mean(d["val_bal_acc"], n_last)
         print(f"  {label:<28} {acc:>7.3f} {sens:>7.3f} {spec:>7.3f} {bal:>8.3f}")
 
-    # Breakdown of validation accuracy by AD severity (the CDR grades pooled under
-    # label 1), mean of the last 50 epochs. The validation counts are tiny, so read
-    # these as trends, not precise numbers.
+    # Breakdown of validation accuracy by CDR grade (0.5/1/2, pooled under label 1),
+    # mean of the last 50 epochs. The validation counts are tiny, so read these as
+    # trends, not precise numbers.
     counts = val_grade_counts(manifest_yaml(config))
-    print(f"\nValidation accuracy by AD grade (mean of last {n_last} epochs):")
+    print(f"\nValidation accuracy by CDR grade (mean of last {n_last} epochs):")
     for g, _, name in GRADE_INFO:
         c = counts[g]
         print(f"  {name:<20} {c['patches']:>3} patches from {len(c['subjects'])} subject(s)")

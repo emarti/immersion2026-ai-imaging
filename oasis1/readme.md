@@ -1,16 +1,21 @@
 # OASIS-1 Alzheimer's CNN — a teaching pipeline
 
 This project trains a small neural network to look at a **single 2-D slice of a brain
-MRI** and guess whether the person has **Alzheimer's-type dementia** (label `1`) or is
-**healthy** (label `0`). It uses Washington University's
+MRI** and guess whether the person is **CDR-positive** (label `1`) or **CDR-negative**
+(label `0`). It uses Washington University's
 [OASIS-1](https://www.oasis-brains.org) brain-scan dataset.
 
-It is written to be **read and understood**, not to win a competition. If you have
-never seen machine learning or a "convolutional neural network" (CNN) before, read
-**[introduction.md](introduction.md)** first — it explains the ideas and *why* this project is
+> **What the labels mean.** The target comes straight from the Clinical Dementia Rating
+> (CDR): **CDR-negative = CDR 0** (no impairment); **CDR-positive = CDR 0.5 / 1 / 2** (any
+> impairment, severities pooled). These are clinical-severity classes, *not* biomarker-
+> confirmed diagnoses — so we deliberately avoid stigmatizing or diagnosis-implying names
+> for the two classes and label them by their CDR status instead.
+
+It is written as a basic introduction to convolutional neural networks (CNNs) for biological imaging, while it might not win a competition. Read
+**[introduction.md](introduction.md)** to explain the ideas and why this project is
 built the way it is. This file explains *how to run it* and *what every setting does*.
 
-The whole thing runs as five small Python scripts, in order. Each one reads a single
+The whole project runs as five small Python scripts, in order. Each one reads a single
 settings file, **`config.yaml`**, and writes its results into an `outputs/` folder.
 
 ```
@@ -93,15 +98,15 @@ the config) and is safe to delete and regenerate.
 |---|---|---|---|
 | 1 | `step1-gather-metadata.py` | Reads every session's `.txt`, works out age/sex/label, finds the image file, and cross-checks against the official OASIS spreadsheet. | `outputs/metadata.csv` (one row per scan session) |
 | 2 | `step2-assign-groups.py` | Chooses the study **cohort** (which subjects to use) and splits them into **train / validate / test** groups. | `outputs/splits.yaml` |
-| 3 | `step3-generate-slices.py` | For each chosen subject, cuts 2-D **hippocampus patches** (left and right) out of the 3-D brain and saves them as PNG images. | `outputs/<split>/*.png` + `outputs/manifest.yaml` |
+| 3 | `step3-generate-slices.py` | For each chosen subject, cuts 2-D **hippocampus patches** (left and right) out of the 3-D brain and saves them as PNG images; also draws a few **context** images showing the crop boxes on the full slice. | `outputs/<split>/*.png` + `outputs/manifest.yaml` + `outputs/slice_context/` |
 | 4 | `step4a … step4d-train-network.py` | Trains **four different CNN designs**, each recording how well it does after every training pass. | `outputs/training_log_4{a,b,c,d}.csv` |
 | 5 | `step5-plot-training.py` | Draws all the designs' learning curves on one figure so you can compare them. | `outputs/training_comparison.png` |
-| 6 | `step6-gradcam.py` | **Grad-CAM**: overlays a heatmap on sample patches showing *where* a trained design looks to call one "demented". | `outputs/gradcam/` + `gradcam_grid.png` |
+| 6 | `step6-gradcam.py` | **Grad-CAM**: overlays a heatmap on sample patches showing *where* a trained design looks to call one CDR-positive. | `outputs/gradcam/` + `gradcam_grid.png` |
 
 **The "label"** (what we're trying to predict) comes from the **CDR** (Clinical
-Dementia Rating) in each session's text file: `CDR = 0` → healthy (`0`); `CDR = 0.5, 1,
-or 2` → demented (`1`); a blank CDR (young subjects were never assessed) → the subject
-is skipped.
+Dementia Rating) in each session's text file: `CDR = 0` → CDR-negative (`0`); `CDR = 0.5,
+1, or 2` → CDR-positive (`1`); a blank CDR (young subjects were never assessed) → the
+subject is skipped.
 
 ---
 
@@ -164,10 +169,10 @@ cohort:
   max_subjects: null
 ```
 - **`age_min` / `age_max`** — only include subjects whose age is in this range
-  (inclusive). Dementia is age-related, so restricting the age range keeps the healthy
-  and demented groups more comparable. Widening it usually gives you more subjects.
+  (inclusive). Dementia is age-related, so restricting the age range keeps the CDR-negative
+  and CDR-positive groups more comparable. Widening it usually gives you more subjects.
   > **Danger — the age (and sex) confound.** Setting `age_min` too **low** pulls in
-  > younger subjects, who are mostly healthy, so the healthy and demented groups end up
+  > younger subjects, who are mostly CDR-negative, so the CDR-negative and CDR-positive groups end up
   > differing systematically in age. The network can then score well by quietly learning
   > to guess **age (or sex)** — which correlate with the label in this sample — instead
   > of reading hippocampal atrophy. Raising `age_min` (e.g. to **70**) better
@@ -177,10 +182,10 @@ cohort:
   > well-controlled score usually beats a higher, confounded one.
 - **`balance`** — how to even out the groups. This matters a lot (see
   [introduction.md](introduction.md)):
-  - `strict` — equal numbers in all four **sex × label** cells (Male/Healthy,
-    Male/Demented, Female/Healthy, Female/Demented). Fairest, but throws away the most
+  - `strict` — equal numbers in all four **sex × label** cells (Male/CDR-,
+    Male/CDR+, Female/CDR-, Female/CDR+). Fairest, but throws away the most
     data because it's limited by the rarest cell.
-  - `label` — equal **healthy vs demented**, but don't force the sexes to match.
+  - `label` — equal **CDR-negative vs CDR-positive**, but don't force the sexes to match.
     Roughly **doubles** the usable subjects here, and keeps chance at 50 %.
   - `none` — use every eligible subject (most data, but the groups may be uneven). With
     uneven groups, **raw accuracy can mislead and chance is no longer 0.50**, so read
@@ -214,10 +219,10 @@ The 3-D brain is `176 × 208 × 176` voxels (1 voxel = 1 mm). We take **transver
 ### 6.4 Hippocampus crop + augmentation — *cut a small box, optionally jiggle it*
 ```yaml
 hippocampus:
-  ap: [74, 154]
-  lr_left: [88, 152]
+  ap: [80, 148]
+  lr_left: [90, 148]
   apply_random_shifts: true
-  random_shift: 4
+  random_shift: 3
   n_shifts: 10
 ```
 Instead of feeding the whole slice, we crop a small rectangle around each hippocampus.
@@ -225,7 +230,10 @@ There are two (left and right), and we save them as **separate images** — whic
 doubles the amount of data.
 - **`ap`** — the top/bottom (anterior–posterior) rows of the crop box, in voxels.
 - **`lr_left`** — the left/right columns of the box for the **left** hippocampus. The
-  **right** box is this one mirrored to the other side automatically.
+  **right** box is this one mirrored to the other side automatically. Note we mirror the box
+  **location** but do **not** flip the pixels, so the two hippocampi reach the network as
+  mirror images of each other — which is fine (a CNN copes with both orientations, and it
+  doubles as free reflection augmentation; see introduction.md §10 for the why).
 - **`apply_random_shifts`** — turn **data augmentation** on/off. When `true`, each
   **training** crop is made several times, each nudged by a small random amount — this
   teaches the network to not depend on the exact position. When `false`, the
@@ -274,7 +282,7 @@ gradcam:
   seed: 0                 # sampling seed (reproducible)
   overlay_alpha: 0.45     # heatmap opacity over the grayscale patch (0-1)
 ```
-Step 6 draws heatmaps of **where** a trained model looks to push a patch toward "demented".
+Step 6 draws heatmaps of **where** a trained model looks to push a patch toward CDR-positive.
 - **`model`** — the checkpoint (written by step 4) to explain. Name the file directly; the
   network shape is **inferred** from it (`model_4a.pt` → the 4a design), so you don't pass
   a design letter. Defaults to the 4a baseline.
@@ -299,10 +307,15 @@ All under `outputs/`:
 - **`manifest.yaml`** — the master list of every generated patch. Each entry records
   `png_path, img_path, subject, split, label, cdr, slice_index, offset_mm, side` (L/R),
   and `shift_x/shift_y` (the augmentation nudge, `0` when off). `cdr` is the raw
-  dementia grade (0.5/1/2) behind label 1. Step 4 reads this file.
+  CDR grade (0.5/1/2) behind label 1. Step 4 reads this file.
 - **`train/  validate/  test/`** — the PNG patches, named
   `{subject}_lbl{label}_ax{sliceindex}_{L|R}_a{copy}.png`. The label and side are in
   the filename so you can eyeball them in a file browser.
+- **`slice_context/<split>/`** — step 3's context images for a sample of subjects
+  (`slices.context_samples`, default 3 per split): the full axial slice with a rectangle
+  around each crop window — **L** in lime, **R** in deepskyblue. Train images show **every
+  random-shift box per plane** (one image per plane); validate/test show the single box.
+  Handy for judging whether the ROI is the right size and lands on the hippocampus.
 - **`training_log_4{a,b,c,d}.csv`** — one per design. Columns: `epoch, train_loss,
   train_acc, val_loss, val_acc, val_sens, val_spec, val_bal_acc`, plus per-severity
   validation accuracy `val_acc_cdr05, val_acc_cdr10, val_acc_cdr20`.
@@ -311,10 +324,10 @@ All under `outputs/`:
 - **`model_4{a,b,c,d}.pt`** — each design's trained weights (a PyTorch `state_dict`),
   saved by step 4 so step 6 can reload them without retraining.
 - **`gradcam/`** + **`gradcam_grid.png`** — step 6's Grad-CAM overlays: per patch, **two
-  panels** (push-toward-healthy and push-toward-demented, in two distinct colormaps), plus a
+  panels** (push-toward-CDR− and push-toward-CDR+, in two distinct colormaps), plus a
   montage of all sampled patches.
 - **`gradcam_context/`** — step 6's whole-slice overlays: one PNG per subject, **two
-  side-by-side full axial slices** (healthy | demented) with the L/R hippocampus heatmaps
+  side-by-side full axial slices** (CDR− | CDR+) with the L/R hippocampus heatmaps
   drawn at their crop boxes (this pass reloads the raw volume).
 
 ### Reading the training logs
@@ -324,43 +337,43 @@ the training set and the (held-out) validation set:
 - **accuracy** — fraction of patches classified correctly (0.5 = pure guessing *only
   when the two groups are equal-sized*; with `balance: none` they may not be, so lead
   with balanced accuracy below);
-- **sensitivity** — of the truly demented, how many were caught;
-- **specificity** — of the truly healthy, how many were correctly cleared;
+- **sensitivity** — of the truly CDR-positive, how many were caught;
+- **specificity** — of the truly CDR-negative, how many were correctly cleared;
 - **balanced accuracy** — the average of sensitivity and specificity (the fair
   headline number). See [introduction.md](introduction.md) for what these mean and why they
   matter.
 
-The healthy sign of learning: training accuracy climbs. The sign that it will
+The encouraging sign of learning: training accuracy climbs. The sign that it will
 **generalize** to new people: the *validation* numbers improve too. When training keeps
 improving but validation stalls or gets worse, the model is **overfitting** — see
 [introduction.md](introduction.md).
 
-step5 also prints a **breakdown of validation accuracy by AD severity**. Our label 1
-lumps together CDR 0.5 (very mild), 1 (mild), and 2 (moderate) dementia; this breakdown
+step5 also prints a **breakdown of validation accuracy by CDR grade**. Our label 1
+lumps together CDR 0.5 (very mild), 1 (mild), and 2 (moderate); this breakdown
 shows how well each grade is caught — you'd expect more-severe (more atrophied) cases to
 be easier. It prints the patch/subject count per grade too, because those counts are
 **small** (only a handful of validation subjects per grade), so treat the numbers as
 trends, not precise figures.
 
 ### Reading the Grad-CAM heatmaps
-step 6 shows, for each patch, **two panels**: **left = "pushes toward healthy"** and
-**right = "pushes toward demented"**, in two distinct colormaps (`jet` for demented, `cool`
-for healthy) so you can tell them apart — each highlighting where changing the image would
+step 6 shows, for each patch, **two panels**: **left = "pushes toward CDR−"** and
+**right = "pushes toward CDR+"**, in two distinct colormaps (`jet` for CDR+, `cool`
+for CDR−) so you can tell them apart — each highlighting where changing the image would
 move the score that way. Three things to keep in mind:
 
-- **The two directions are complementary, not opposites.** With one output, the demented map
-  is `ReLU(+importance)` and the healthy map is `ReLU(−importance)` — the same signed map
-  split into its positive and negative lobes — so they light up *different* regions. Looking
-  quite different is expected (see [introduction.md](introduction.md) §14).
-- **It explains a chosen target, not the truth.** A *healthy* patch's demented panel still
-  shows "what would make it look demented." The panel **title** is colored by the true label
-  — **blue = healthy, red = demented** — next to the model's `P(dem)`.
+- **The two directions are complementary, not opposites.** With one output, the CDR-positive
+  map is `ReLU(+importance)` and the CDR-negative map is `ReLU(−importance)` — the same signed
+  map split into its positive and negative lobes — so they light up *different* regions.
+  Looking quite different is expected (see [introduction.md](introduction.md) §14).
+- **It explains a chosen target, not the truth.** A *CDR-negative* patch's CDR-positive panel
+  still shows "what would make it look CDR-positive." The panel **title** is colored by the
+  true label — **blue = CDR-negative, red = CDR-positive** — next to the model's `P(CDR+)`.
 - **It's coarse.** The map comes from the last conv layer (a ~10×8 grid here), upsampled —
   so it localizes roughly, not to the pixel. Use it as a sanity check ("is the network
   looking at the hippocampus, or at a border artifact?"), not a precise segmentation.
 
 step 6 also writes **whole-slice context** overlays to `outputs/gradcam_context/` (one per
-subject): two side-by-side full axial slices (healthy | demented) with the L/R heatmaps drawn
+subject): two side-by-side full axial slices (CDR− | CDR+) with the L/R heatmaps drawn
 at their crop boxes, so you can see *where in the brain* the model finds each kind of
 evidence. That pass reloads the raw volume, so it needs `DATA_RAW_PATH` set.
 

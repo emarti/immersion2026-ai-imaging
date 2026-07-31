@@ -6,12 +6,13 @@ that most raise a chosen output score. From one backward pass we build a signed 
 map ``raw = sum_k alpha_k * A_k`` (alpha_k = mean over space of dz/dA_k; A_k = the last conv
 feature maps fed to global-average pooling), and show BOTH of its lobes side by side:
 
-    demented map = ReLU(+raw)   ('jet'):   what pushes this patch toward 'demented'
-    healthy  map = ReLU(-raw)   ('cool'):  what pushes it toward 'healthy'
+    cdr_positive map = ReLU(+raw)   ('jet'):   what pushes this patch toward CDR-positive
+    cdr_negative map = ReLU(-raw)   ('cool'):  what pushes it toward CDR-negative
 
-The two are *complementary* -- disjoint lobes of the same signed map -- so they look quite
-different; that is expected, not a bug. Grad-CAM explains a target you choose, not the
-ground truth (a healthy patch's demented map still shows "what would make it look demented").
+(CDR-negative = CDR 0; CDR-positive = CDR 0.5 / 1 / 2, i.e. any impairment.) The two maps
+are *complementary* -- disjoint lobes of the same signed map -- so they look quite
+different; that is expected, not a bug. Grad-CAM explains a target you choose, not the ground
+truth (a CDR-negative patch's CDR-positive map still shows "what would make it look CDR+").
 
 Method: Selvaraju et al., "Grad-CAM: Visual Explanations from Deep Networks via
 Gradient-based Localization", ICCV 2017. Structurally inspired by (not copied from) the
@@ -88,9 +89,9 @@ def _finish(cam2d, h, w):
 def grad_cam(model, x):
     """Grad-CAM for BOTH directions of one patch, from a single backward pass.
 
-    ``x`` is a 1x1xHxW tensor. Returns ``(cam_dem, cam_hlt, logit)``: the demented map
-    ``ReLU(+raw)`` and the healthy map ``ReLU(-raw)`` where ``raw = sum_k alpha_k A_k`` is
-    the signed importance map. The two are complementary (disjoint lobes of one map). Hooks
+    ``x`` is a 1x1xHxW tensor. Returns ``(cam_pos, cam_neg, logit)``: the CDR-positive map
+    ``ReLU(+raw)`` and the CDR-negative map ``ReLU(-raw)`` where ``raw = sum_k alpha_k A_k``
+    is the signed importance map. The two are complementary (disjoint lobes of one map). Hooks
     ``model.gap`` -- present in every design -- to grab the feature map ``A`` and ``dz/dA``.
     """
     captured = {}
@@ -103,7 +104,7 @@ def grad_cam(model, x):
     handle = model.gap.register_forward_hook(fwd_hook)
     try:
         model.zero_grad(set_to_none=True)
-        z = model(x).squeeze()          # scalar logit z (P(dem) = sigmoid(z))
+        z = model(x).squeeze()          # scalar logit z (P(CDR+) = sigmoid(z))
         z.backward()
         A = captured["A"]               # 1 x C x h x w  (activations)
         alpha = A.grad.mean(dim=(2, 3), keepdim=True)   # 1 x C x 1 x 1  (channel weights)
@@ -112,9 +113,9 @@ def grad_cam(model, x):
         handle.remove()
 
     h, w = x.shape[-2:]
-    cam_dem = _finish(F.relu(raw), h, w)                # pushes toward demented  (ReLU(+raw))
-    cam_hlt = _finish(F.relu(-raw), h, w)               # pushes toward healthy   (ReLU(-raw))
-    return cam_dem, cam_hlt, float(z.detach())
+    cam_pos = _finish(F.relu(raw), h, w)                # pushes toward CDR-positive  (ReLU(+raw))
+    cam_neg = _finish(F.relu(-raw), h, w)               # pushes toward CDR-negative  (ReLU(-raw))
+    return cam_pos, cam_neg, float(z.detach())
 
 
 def pick_rows(rows, n, seed):
@@ -138,7 +139,7 @@ def pick_rows(rows, n, seed):
 def panel_title(row, prob):
     true = int(row["label"])
     return (f"{row['subject']} {row['side']}\n"
-            f"true={'dem' if true else 'hlth'}  P(dem)={prob:.2f}")
+            f"true={POS_SHORT if true else NEG_SHORT}  P(CDR+)={prob:.2f}")
 
 
 def sigmoid(z):
@@ -154,15 +155,19 @@ def hippocampus_boxes(a0, a1, l0, l1, width):
     return {"L": (a0, a1, l0, l1), "R": (a0, a1, width - l1, width - l0)}
 
 
-# Heatmap colormaps: the classic 'jet' for the demented direction (as before), and a
-# distinct 'cool' (cyan->magenta) for healthy, so the two direction panels are easy to tell
-# apart. (The panel TITLE colour, separately, encodes the truth: red demented / blue healthy.)
-CMAP_DEMENTED = "jet"
-CMAP_HEALTHY = "cool"
+# Heatmap colormaps: the classic 'jet' for the CDR-positive direction (as before), and a
+# distinct 'cool' (cyan->magenta) for CDR-negative, so the two direction panels are easy to
+# tell apart. (The panel TITLE colour, separately, encodes the truth: red CDR+ / blue CDR-.)
+CMAP_CDR_POS = "jet"
+CMAP_CDR_NEG = "cool"
+
+# Compact class names for cramped plot text (full names come from config `labels:`).
+POS_SHORT = "CDR+"
+NEG_SHORT = "CDR-"
 
 
 def truth_color(true):
-    """Colour for a true label: red = demented (1), blue = healthy (0)."""
+    """Colour for a true label: red = CDR-positive (1), blue = CDR-negative (0)."""
     return "red" if int(true) else "blue"
 
 
@@ -184,6 +189,9 @@ def main():
     config = load_config()
     outputs_path = config["outputs_path"]
     gc = config.get("gradcam") or {}
+    labels = config.get("labels") or {}
+    name_neg = labels.get("cdr_negative", "CDR Negative")   # label 0 display name
+    name_pos = labels.get("cdr_positive", "CDR Positive")   # label 1 display name
 
     # Resolve each option: CLI override -> config `gradcam.*` -> hardcoded fallback.
     model_name = args.model or gc.get("model", "model_4a.pt")
@@ -217,19 +225,19 @@ def main():
     out_dir = os.path.join(outputs_path, "gradcam")
     os.makedirs(out_dir, exist_ok=True)
 
-    panels = []                              # (gray, cam_hlt, cam_dem, title, colour)
+    panels = []                              # (gray, cam_neg, cam_pos, title, colour)
     for row in rows:
         gray = np.asarray(Image.open(os.path.join(outputs_path, row["png_path"])),
                           dtype=np.float32) / 255.0             # H x W in [0,1]
         x = torch.from_numpy(gray)[None, None]                  # 1 x 1 x H x W (matches ToTensor)
-        cam_dem, cam_hlt, logit = grad_cam(model, x)
+        cam_pos, cam_neg, logit = grad_cam(model, x)
         title = panel_title(row, sigmoid(logit))
         colour = truth_color(int(row["label"]))
 
-        # Two panels: left = pushes toward healthy (blue), right = pushes toward demented (red).
+        # Two panels: left = pushes toward CDR- (blue), right = pushes toward CDR+ (red).
         fig, axs = plt.subplots(1, 2, figsize=(4.6, 2.9))
-        for ax, cam, cmap, name in ((axs[0], cam_hlt, CMAP_HEALTHY, "push -> healthy"),
-                                    (axs[1], cam_dem, CMAP_DEMENTED, "push -> demented")):
+        for ax, cam, cmap, name in ((axs[0], cam_neg, CMAP_CDR_NEG, f"push -> {NEG_SHORT}"),
+                                    (axs[1], cam_pos, CMAP_CDR_POS, f"push -> {POS_SHORT}")):
             ax.imshow(gray, cmap="gray")
             ax.imshow(cam, cmap=cmap, alpha=alpha, vmin=0.0, vmax=1.0)
             ax.set_axis_off()
@@ -239,20 +247,20 @@ def main():
         fname = f"gradcam_4{design}_{row['subject']}_{row['side']}_lbl{int(row['label'])}.png"
         fig.savefig(os.path.join(out_dir, fname), dpi=120, bbox_inches="tight")
         plt.close(fig)
-        panels.append((gray, cam_hlt, cam_dem, title, colour))
+        panels.append((gray, cam_neg, cam_pos, title, colour))
 
-    # Montage: one row per patch -- col 0 = push->healthy (blue), col 1 = push->demented (red).
+    # Montage: one row per patch -- col 0 = push->CDR- (blue), col 1 = push->CDR+ (red).
     k = len(panels)
     fig, axes = plt.subplots(k, 2, figsize=(5.2, 2.6 * k), squeeze=False)
     for ax in axes.flat:
         ax.set_axis_off()
-    for (gray, cam_hlt, cam_dem, title, colour), (ax_h, ax_d) in zip(panels, axes):
-        for ax, cam, cmap in ((ax_h, cam_hlt, CMAP_HEALTHY), (ax_d, cam_dem, CMAP_DEMENTED)):
+    for (gray, cam_neg, cam_pos, title, colour), (ax_h, ax_d) in zip(panels, axes):
+        for ax, cam, cmap in ((ax_h, cam_neg, CMAP_CDR_NEG), (ax_d, cam_pos, CMAP_CDR_POS)):
             ax.imshow(gray, cmap="gray")
             ax.imshow(cam, cmap=cmap, alpha=alpha, vmin=0.0, vmax=1.0)
         ax_h.set_title(title, fontsize=7, color=colour, loc="left")
     fig.suptitle(f"Grad-CAM (design 4{design})    "
-                 f"left/blue = pushes toward HEALTHY    ·    right/red = pushes toward DEMENTED",
+                 f"left/blue = pushes toward {name_neg}    ·    right/red = pushes toward {name_pos}",
                  fontsize=10)
     fig.tight_layout()
     grid_path = os.path.join(outputs_path, "gradcam_grid.png")
@@ -295,17 +303,17 @@ def main():
         boxes = hippocampus_boxes(a0, a1, l0, l1, W)
 
         # Per side, compute both direction maps.
-        dem, hlt, probs = {}, {}, {}
+        pos, neg, probs = {}, {}, {}
         for side, (r0, r1, c0, c1) in boxes.items():
             crop = sl[r0:r1, c0:c1].astype(np.float32) / 255.0        # == the validated PNG
-            cam_dem, cam_hlt, logit = grad_cam(model, torch.from_numpy(crop)[None, None])
-            dem[side], hlt[side] = cam_dem, cam_hlt
+            cam_pos, cam_neg, logit = grad_cam(model, torch.from_numpy(crop)[None, None])
+            pos[side], neg[side] = cam_pos, cam_neg
             probs[side] = sigmoid(logit)
 
-        # Two panels: left = pushes toward healthy (blue), right = pushes toward demented (red).
+        # Two panels: left = pushes toward CDR- (blue), right = pushes toward CDR+ (red).
         fig, axs = plt.subplots(1, 2, figsize=(9.2, 5.4))
-        for ax, cams, cmap, name in ((axs[0], hlt, CMAP_HEALTHY, "push -> healthy"),
-                                     (axs[1], dem, CMAP_DEMENTED, "push -> demented")):
+        for ax, cams, cmap, name in ((axs[0], neg, CMAP_CDR_NEG, f"push -> {NEG_SHORT}"),
+                                     (axs[1], pos, CMAP_CDR_POS, f"push -> {POS_SHORT}")):
             ax.imshow(sl, cmap="gray", vmin=0, vmax=255)
             for side, (r0, r1, c0, c1) in boxes.items():
                 # origin='upper' default: extent = (left, right, bottom, top) = (c0, c1, r1, r0)
@@ -317,15 +325,15 @@ def main():
             ax.set_ylim(H, 0)
             ax.set_axis_off()
             ax.set_title(name, fontsize=10)
-        fig.suptitle(f"{subject}   true = {'demented' if true else 'healthy'}   "
-                     f"P(dem)  L = {probs['L']:.2f}   R = {probs['R']:.2f}",
+        fig.suptitle(f"{subject}   true = {name_pos if true else name_neg}   "
+                     f"P(CDR+)  L = {probs['L']:.2f}   R = {probs['R']:.2f}",
                      fontsize=11, color=truth_color(true))
         fig.tight_layout()
         out = os.path.join(ctx_dir, f"gradcam_ctx_4{design}_{subject}.png")
         fig.savefig(out, dpi=130, bbox_inches="tight")
         plt.close(fig)
         ctx_saved += 1
-        print(f"  [{i}/{len(subjects)}] {subject}  P(dem) L={probs['L']:.2f} R={probs['R']:.2f}")
+        print(f"  [{i}/{len(subjects)}] {subject}  P(CDR+) L={probs['L']:.2f} R={probs['R']:.2f}")
 
     print(f"Saved {ctx_saved} context overlay(s) -> {ctx_dir}/")
 

@@ -6,7 +6,7 @@ Reads ``metadata.csv`` from step1 and produces ``config/splits.yaml``.
 Cohort: subjects in the configured age range with a valid CDR and an image on
 disk. ``cohort.balance`` then selects how to balance them:
   strict -- equal per (sex x label) cell, capped by the smallest cell.
-  label  -- equal healthy/demented, sex left free (~2x strict).
+  label  -- equal cdr_negative/cdr_positive, sex left free (~2x strict).
   none   -- all eligible subjects, no balancing.
 
 Splits are made at the SUBJECT level (no subject appears in two splits) and are
@@ -82,7 +82,7 @@ def select_cohort(rows: list[dict], balance: str, rng: random.Random,
     cell counts for reporting, and ``info`` is a one-line description. Modes:
 
       strict -- equal per (sex x label) cell, capped by the smallest cell.
-      label  -- equal healthy/demented, sex left free.
+      label  -- equal cdr_negative/cdr_positive, sex left free.
       none   -- all eligible subjects, no balancing.
 
     ``max_subjects`` optionally caps the total for fast test runs.
@@ -152,7 +152,7 @@ def assign_splits(balanced: dict, ratios: dict, rng: random.Random) -> dict:
                         "subject": r["subject"],
                         "sex": r["sex"],
                         "label": int(r["label"]),
-                        "cdr": float(r["cdr"]),   # AD grade (0.5/1/2) behind label 1
+                        "cdr": float(r["cdr"]),   # CDR grade (0.5/1/2) behind label 1
                         "img_path": r["img_path"],
                     }
                 )
@@ -169,25 +169,25 @@ def build_summary(splits: dict) -> dict:
             "total": len(members),
             "male": sum(1 for m in members if m["sex"] == "M"),
             "female": sum(1 for m in members if m["sex"] == "F"),
-            "demented": sum(1 for m in members if m["label"] == 1),
-            "healthy": sum(1 for m in members if m["label"] == 0),
+            "cdr_positive": sum(1 for m in members if m["label"] == 1),
+            "cdr_negative": sum(1 for m in members if m["label"] == 0),
         }
     return summary
 
 
 def print_summary(sizes: dict, info: str, summary: dict) -> None:
     print("\nEligible (sex, label) cell sizes:")
-    names = {("M", "0"): "Male/Healthy", ("M", "1"): "Male/Demented",
-             ("F", "0"): "Female/Healthy", ("F", "1"): "Female/Demented"}
+    names = {("M", "0"): "Male/CDR-", ("M", "1"): "Male/CDR+",
+             ("F", "0"): "Female/CDR-", ("F", "1"): "Female/CDR+"}
     for k, v in sizes.items():
         print(f"  {names[k]:<16} {v}")
     print(f"\nCohort: {info}\n")
-    header = f"  {'split':<8} {'total':>5} {'male':>5} {'female':>7} {'demented':>9} {'healthy':>8}"
+    header = f"  {'split':<8} {'total':>5} {'male':>5} {'female':>7} {'CDR+':>9} {'CDR-':>8}"
     print(header)
     for split in SPLITS:
         s = summary[split]
         print(f"  {split:<8} {s['total']:>5} {s['male']:>5} {s['female']:>7} "
-              f"{s['demented']:>9} {s['healthy']:>8}")
+              f"{s['cdr_positive']:>9} {s['cdr_negative']:>8}")
 
 
 def main() -> None:

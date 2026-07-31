@@ -1,15 +1,13 @@
 # Introduction — teaching a computer to read a brain MRI
 
-*Class notes. No prior knowledge of AI, programming, or neural networks is assumed.*
+*Class notes. No prior knowledge of AI, programming, or neural networks is assumed. This section was written entirely by Claude, and developed alongside the code.*
 
 These notes explain the **ideas** behind this project and, just as important, **why we
 made each choice**. They are the companion to [readme.md](readme.md), which is the
 practical "how to run it and what every setting does" guide. Read these notes for
 understanding; use the readme when you sit down to run the code.
 
-We build up slowly, one idea at a time. Each section adds a small piece, defines new
-words the moment they appear, and — wherever it helps — walks through a tiny worked
-example with real numbers. Watch for the **"Key idea"** boxes: those are the sentences
+Watch for the **"Key idea"** boxes: those are the sentences
 worth remembering. At the very end there are a few **check-your-understanding**
 questions and a **glossary**.
 
@@ -33,20 +31,24 @@ look at a brain scan and tell whether that shrinkage is present. That is exactly
 task, stated as narrowly and concretely as possible:
 
 > **Key idea.** Given **one 2-D slice** of a brain MRI, output a **single yes/no
-> guess**: "demented" (1) or "healthy" (0). This kind of yes/no prediction is called
-> **binary classification**.
+> guess**: **CDR-positive** (1) or **CDR-negative** (0). This kind of yes/no prediction is
+> called **binary classification**.
 
 To *teach* the computer, we need the correct answer for each scan — the **label**. Ours
 comes from the **CDR** (Clinical Dementia Rating), a score a clinician assigns:
 
 | CDR | Meaning | Our label |
 |---|---|---|
-| 0 | no dementia | 0 (healthy) |
-| 0.5, 1, 2 | very mild → moderate dementia | 1 (demented) |
+| 0 | no impairment | 0 (CDR-negative) |
+| 0.5, 1, 2 | very mild → moderate dementia | 1 (CDR-positive) |
 | (blank) | never assessed (e.g. young subjects) | excluded |
 
-Note that label 1 **pools three severities** — very mild (0.5), mild (1), and moderate
-(2) — into one "demented" class. That's a real simplification: catching moderate
+We name the classes by their CDR status — **CDR-negative** (CDR 0) and **CDR-positive**
+(CDR ≥ 0.5) — rather than by a disease or severity word: the label is a clinical-severity
+score, not a biomarker-confirmed diagnosis, and labelling a person by a disease term is
+stigmatizing. Note that label 1
+**pools three severities** — very mild (0.5), mild (1), and moderate
+(2) — into one CDR-positive class. That's a real simplification: catching moderate
 atrophy should be easier than very-mild. step5 therefore reports validation accuracy
 **broken down by CDR grade** so you can see this (with a caution: only a handful of
 validation subjects fall in each grade, so those per-grade numbers are noisy).
@@ -58,28 +60,26 @@ of people, each with an MRI and demographic/clinical information.
 
 ## 2. What is machine learning?
 
-A **traditional program** is a list of rules a human wrote: *"if this, do that."* That
+Before **machine learning**, researchers wrote a list of rules a human wrote: *"if this, do that."* That
 works when you can state the rules. But nobody can write down the exact rule for "this
 blur of gray pixels means a shrunken hippocampus." The pattern is too subtle and varies
 from person to person.
 
 **Machine learning** turns the problem around. Instead of writing rules, you show the
-program **many examples**, each paired with the **right answer**, and the program
+program many examples, each paired with the right answer, and the program
 **adjusts itself** until it can produce the right answer on its own.
 
-- The "examples" here are hippocampus images; the "right answers" are the healthy/
-  demented labels. Learning from labeled examples like this is called **supervised
-  learning**.
-- Inside the program are thousands of adjustable numbers called **parameters** (or
-  **weights**). "Learning" literally means *slowly changing those numbers* so the
-  program's guesses match the labels better.
+- The "examples" here are hippocampus images; the "right answers" are the CDR-negative /
+  CDR-positive labels. Learning from labeled examples like this is called **supervised
+  learning**. (In unsupervised learning, the computer groups similar examples and identifies disparate groups.)
+- Inside the program are thousands of adjustable numbers called **parameters** or
+  **weights**. "Learning" means slowly changing those numbers to improve the 
+  program's guess of the labels better.
 
 ### The one thing that makes this hard: generalization
 
-We do **not** want a program that just memorizes the exact images it was shown. A
-memorizer scores perfectly on those images and is useless on anyone new. We want a
-program that **works on people it has never seen**. That ability is called
-**generalization**, and protecting it drives almost every decision in this project.
+We do **not** want a program that just memorizes the exact images it was shown. A program that memorizes will score perfectly on learned images but will be useless on new data. If we want a
+program that can generalize, it needs to correctly identify data it has never seen. Achieving **generalization** drives almost every decision in this project.
 
 To measure generalization honestly, we split our people into **three groups**:
 
@@ -102,11 +102,11 @@ Think of studying for an exam:
 
 ---
 
-## 3. Images are just grids of numbers
+## 3. Images are grids of numbers
 
 A grayscale image is a **grid of numbers**, one per pixel, where the number is a
 brightness from **0 (black)** to **255 (white)**. That's all an image is to a computer.
-Our hippocampus patches are grids of roughly **64 × 80** such numbers.
+Our hippocampus patches are grids of roughly **58 × 68** such numbers.
 
 A tiny 3 × 3 corner of an image might look like this (dark background on the left,
 bright tissue on the right):
@@ -117,7 +117,7 @@ bright tissue on the right):
  190  205   215
 ```
 
-Everything a neural network does — detecting an edge, deciding "demented" — is just
+Everything a neural network does — detecting an edge, deciding "CDR-positive" — is just
 arithmetic on grids of numbers like this.
 
 ---
@@ -192,8 +192,7 @@ channels**, e.g. `1 → 32 → 64 → 128` channels while the grid halves at eac
 
 - **ReLU** ("rectified linear unit") is the activation step: it replaces every negative
   number with 0 and keeps positives unchanged (`ReLU(-3)=0`, `ReLU(5)=5`). Without a
-  step like this the whole network would collapse into one straight-line function and
-  couldn't represent complex patterns.
+  step like this the whole network would not be able to represent complex patterns.
 - **BatchNorm** rescales the numbers flowing between layers so they stay in a sane range
   (roughly mean 0, spread 1). It mainly makes training faster and more stable.
 
@@ -213,15 +212,17 @@ final steps turn that into one yes/no answer:
 
 2. **The classifier head** is a couple of ordinary neuron layers that turn those 128
    numbers into **one output number** called the **logit**. A big positive logit means
-   "confidently demented," a big negative logit "confidently healthy." Passing the logit
-   through the **sigmoid** function squashes it to a probability between 0 and 1. We
-   predict **demented when the logit is above 0** (probability above 0.5).
+   "confidently CDR-positive," a big negative logit "confidently CDR-negative." Passing the
+   logit through the **sigmoid** function squashes it to a probability between 0 and 1. We
+   predict **CDR-positive when the logit is above 0** (probability above 0.5).
 
 ### 4.7 A full pass through design 4a
 
 Putting it together, here is what happens to one hippocampus patch in the reference
 network (design **4a**, channels `8→16→32`), with the shape at each step
-(`channels × height × width`):
+(`channels × height × width`). The input size below is a **round example** (80 × 64) chosen
+so the halving stays tidy; our real patch is ~58 × 68, and — as the note after the table
+says — GAP makes the exact height/width irrelevant:
 
 ```
 input patch            1 x 80 x 64
@@ -279,41 +280,45 @@ A few more words you'll meet:
 **Accuracy** = the fraction of images the model labels correctly. It's the obvious
 metric, but it can be dangerously misleading when the two classes are unequal.
 
-> **Example.** Suppose a group is 90 % healthy, 10 % demented. A lazy model that
-> *always* says "healthy," no matter the image, gets **90 % accuracy** — while being
-> completely useless (it never catches a single sick person).
+> **Example.** Suppose a group is 90 % CDR-negative, 10 % CDR-positive. A lazy model that
+> *always* says "CDR-negative," no matter the image, gets **90 % accuracy** — while being
+> completely useless (it never catches a single impaired person).
 
 To see through this, we lay out the four possible outcomes in a **confusion matrix**.
-Say we evaluate 40 images (20 truly demented, 20 truly healthy) and the model gets:
+Say we evaluate 40 images (20 truly CDR-positive, 20 truly CDR-negative) and the model gets:
 
 ```
-                    predicted demented   predicted healthy
-truly demented           12  (TP)             8  (FN)
-truly healthy             3  (FP)            17  (TN)
+                    predicted CDR+   predicted CDR−
+truly CDR+              12  (TP)           8  (FN)
+truly CDR−               3  (FP)          17  (TN)
 ```
 
-- **TP** true positives (12): sick, correctly caught.
-- **FN** false negatives (8): sick, wrongly cleared — the dangerous misses.
-- **FP** false positives (3): healthy, wrongly alarmed.
-- **TN** true negatives (17): healthy, correctly cleared.
+- **TP** true positives (12): impaired, correctly caught.
+- **FN** false negatives (8): impaired, wrongly cleared — the dangerous misses.
+- **FP** false positives (3): CDR-negative, wrongly alarmed.
+- **TN** true negatives (17): CDR-negative, correctly cleared.
 
 From these we compute three honest metrics:
 
-- **Sensitivity** (recall) = TP / (TP + FN) = 12/20 = **0.60** — of the truly demented,
+- **Sensitivity** (recall) = TP / (TP + FN) = 12/20 = **0.60** — of the truly CDR-positive,
   how many did we catch?
-- **Specificity** = TN / (TN + FP) = 17/20 = **0.85** — of the truly healthy, how many
+- **Specificity** = TN / (TN + FP) = 17/20 = **0.85** — of the truly CDR-negative, how many
   did we correctly clear?
 - **Balanced accuracy** = average of the two = (0.60 + 0.85)/2 = **0.725** — the fair
   single headline.
 
-Why balanced accuracy is fair: the always-say-healthy model has sensitivity 0 and
+Why balanced accuracy is fair: the always-say-CDR-negative model has sensitivity 0 and
 specificity 1, so its balanced accuracy is (0 + 1)/2 = **0.5** — exactly "no better than
 a coin flip," as it should be.
 
-> **Key idea.** We keep our groups **50/50 healthy/demented**, so chance is **0.50** and
-> plain accuracy already equals balanced accuracy. We still log **sensitivity** and
-> **specificity** because they reveal *which way* a model leans (does it miss sick
-> people, or cry wolf on healthy ones?).
+> **Key idea.** We keep our groups **50/50 CDR-negative/CDR-positive**, so chance is **0.50**
+> and plain accuracy already equals balanced accuracy. We still log **sensitivity** and
+> **specificity** because they reveal *which way* a model leans (does it miss impaired
+> people, or cry wolf on CDR-negative ones?).
+
+All of these judge the model at a single **0.5 threshold**; a threshold-free alternative,
+**AUC** (area under the ROC curve), summarizes performance across *all* thresholds — a natural
+extension of the plots (see §14).
 
 The step4 scripts print all four every epoch and save them to a CSV; step5 also reports
 each design's average over the last 20 epochs.
@@ -370,6 +375,32 @@ Given fixed, scarce data, here are the levers — and where each appears in this
   this edge.
 - **Early stopping.** The best validation score often comes *early*; training longer
   after that just deepens overfitting, so you keep the best epoch rather than the last.
+- **Cross-validation.** Don't lean on a single train/validation split — on ~110 subjects one
+  split is noisy. **k-fold** rotates the validation set so every subject is checked once. It
+  doesn't reduce overfitting; it tells you how much to *trust* the number (see the note next).
+
+**A note on trusting the number — cross-validation.** This pipeline uses **one fixed
+train/validation/test split**. That's simple to teach, but fragile on ~110 subjects: swap a
+few subjects between train and validation and the reported balanced accuracy can wobble by
+**±0.1** — which is why the lab notes keep saying "within noise," and why hand-tuning a knob
+(like the crop) against that one split is a form of overfitting *to the validation set*. The
+standard cure is **k-fold cross-validation**:
+
+- Split the **subjects** (never slices — the same subject-level rule that prevents leakage,
+  and the effective-sample-size point from §7) into *k* equal folds.
+- Train *k* times; each time hold out a different fold for validation and train on the rest.
+- Report the **mean of the *k* scores and their spread** (an error bar), not a single point.
+
+With `k = 5`, every subject is validated exactly once, so you use *all* the data and get a
+**mean ± std** instead of one fragile number. Common variants: **stratified** k-fold keeps
+each fold class-balanced (important here, so chance stays 0.50); **repeated** k-fold reshuffles
+and reruns for tighter error bars; **leave-one-subject-out** takes *k* = number of subjects
+(maximal data use, maximal compute); and **nested** cross-validation adds an *inner* loop to
+choose hyper-parameters/architecture so that tuning doesn't leak into the final estimate — the
+honest way to decide whether 4a really beats 4c. The price is compute (you train *k*× as
+often) and a more complex pipeline, which is why this teaching project keeps to one split — but
+when you need to trust a *difference* rather than just see one, cross-validation is the right
+tool.
 
 ---
 
@@ -420,8 +451,8 @@ You can watch this in the sweep: designs **4a and 4b** are the same 8-16-32 net 
 dropout by itself — expect 4b to overfit (training accuracy climbs high, validation lags).
 The running results in `lab-notes.md` also show the *other* failure mode: an 8-16-32 net
 pushed to **high** dropout (0.8 / 0.4) saw its *specificity* collapse to 0.445 — it started
-crying wolf, calling almost everyone demented — and a tiny net with high dropout **plus**
-augmentation over-regularized the other way into "always healthy." Same lesson from
+crying wolf, calling almost everyone CDR-positive — and a tiny net with high dropout **plus**
+augmentation over-regularized the other way into "always CDR-negative." Same lesson from
 opposite sides.
 
 > **Key idea.** Dropout is the main tuning dial in this project, and its right value
@@ -449,7 +480,25 @@ brain's middle — and confirmed it by actually rendering the slices and looking
 **Crop a small box around the hippocampus — left *and* right.** Feeding the whole slice
 makes the network waste effort on irrelevant tissue and black border. Cropping a small
 box focuses it on the disease-relevant region. We crop **both** hippocampi and save them
-as **separate examples**, which **doubles** the training data for free.
+as **separate examples**, which **doubles** the training data for free. To *see* how big
+the box is and where it lands, step 3 writes **context images** to
+`outputs/slice_context/` for a few subjects — the full axial slice with a rectangle around
+each crop window (train shows all the random-shift boxes; val/test the single box). If the
+boxes look too large or off-centre, that's your cue to tighten `hippocampus.ap` /
+`lr_left`.
+
+> **Why don't we flip the right patch first?** The right box is the left box *mirrored*
+> about the midline, and we take the pixels as-is — we do **not** horizontally flip them. So
+> the left and right hippocampi reach the *same* network as **mirror images of each other**.
+> A fair question: shouldn't we reflect one so both face the same way? We don't, on purpose.
+> A CNN is **translation-equivariant** (it finds a learned pattern wherever it sits) but it is
+> **not** reflection-invariant — so the network does have to learn the hippocampal pattern in
+> both left- and right-handed poses. That's cheap, and actually helpful: the signal we care
+> about is **atrophy** (size, shape, surrounding CSF), which looks the same in a mirror, so
+> feeding both orientations acts like free **reflection augmentation**. Flipping one to align
+> them would be equally valid — just unnecessary — and keeping each patch a *faithful* crop of
+> the real slice is what lets step 6 draw its Grad-CAM boxes back onto the actual brain (§13).
+> (If you'd rather collapse the two into one answer per person, see "Vote per subject" in §14.)
 
 **Split by subject, not by slice.** This one prevents a silent disaster called **data
 leakage**. Because a person's patches are near-duplicates, if some of their patches
@@ -460,19 +509,19 @@ patients. We assign each **whole subject** to one split, so this cannot happen.
 **Three balancing modes; default `label`.** Dementia risk depends on age and sex, so a
 careless dataset could let the model cheat on a **confound** (e.g. guess from sex
 instead of brain shape). The strictest option (`strict`) forces equal Male/Female ×
-Healthy/Demented groups — fairest, but limited by the rarest group (elderly *healthy
-men* are scarce), which throws away roughly half the subjects. We noticed the data is
-*already* nearly balanced by label, so `label` mode — equal healthy/demented, sex left
-free — nearly **doubles** the usable subjects while keeping chance at exactly 0.50, at
+CDR-negative/CDR-positive groups — fairest, but limited by the rarest group (elderly
+*CDR-negative men* are scarce), which throws away roughly half the subjects. We noticed the
+data is *already* nearly balanced by label, so `label` mode — equal CDR-negative/CDR-positive,
+sex left free — nearly **doubles** the usable subjects while keeping chance at exactly 0.50, at
 the mild cost of a possible sex confound. `none` uses everyone. It's a genuine research
 trade-off, exposed as a one-word switch.
 
 **Age-match the groups — a word on `age_min`.** Age is the sneakiest **confound** here.
 Dementia grows more common with age, so if the cohort reaches down into younger people (a
-low `age_min`), the healthy group skews young and the demented group skews old — and a
-network can score well by quietly learning to estimate **age (or sex)**, which track the
+low `age_min`), the CDR-negative group skews young and the CDR-positive group skews old — and
+a network can score well by quietly learning to estimate **age (or sex)**, which track the
 label in this sample, instead of reading hippocampal shrinkage. Raising `age_min` (e.g. to
-**70**) narrows the cohort to a band where healthy and demented subjects *overlap* in age,
+**70**) narrows the cohort to a band where CDR-negative and CDR-positive subjects *overlap* in age,
 forcing the model to earn its predictions from the brain itself. The price is real: **far
 fewer subjects and noticeably lower accuracy.** That drop is not a bug — it is honest.
 Part of the higher accuracy at a low `age_min` was the age/sex confound leaking in, not
@@ -500,7 +549,7 @@ data this scarce, removing regularization (4b) overfits, going wider (4c) tends 
 help, and going shallower (4d) costs surprisingly little, while the lean baseline holds
 its own. No amount of
 architecture cleverness beats simply having more/cleaner data. (Running results live in
-`lab-notes.md`; to fill in the space *between* these sample points yourself, see §13.)
+`lab-notes.md`; to fill in the space *between* these sample points yourself, see §14.)
 
 **Many slices for training, one fixed slice for validation/test.** Training benefits
 from variety, so it uses several nearby planes (and optionally random shifts).
@@ -569,11 +618,68 @@ Why does theirs do better than we should expect from ours? Three instructive rea
   combine left+right into one per-subject vote → (to chase the tutorial) heavier
   preprocessing or a 3-D model. Only after all that is settled do you finally spend the
   **test set**, once, for an unbiased final number.
-- For concrete, hands-on experiments to run, see the next section (§13).
+- For concrete, hands-on experiments to run, see §14.
 
 ---
 
-## 13. Things to play with
+## 13. Looking inside the model: Grad-CAM (step 6)
+
+A validation number tells you *how often* the model is right, not *why*. For a medical
+model that matters: is it reading the hippocampus, or has it latched onto a scanner
+artifact at the edge of the patch? **Grad-CAM** (Gradient-weighted Class Activation
+Mapping) is a simple way to look.
+
+This is our first step into **interpretability** — moving past *whether* the model is right
+to *what it is actually keying on*. Concretely, Grad-CAM answers: **which parts of this
+patch most steer the decision toward CDR-positive (label 1)?**
+
+**The idea.** Take the feature maps `Aₖ` from the **last convolution** — the grids fed
+into global average pooling (§4.7). Each lit up wherever some learned pattern was found.
+Grad-CAM asks: *how much does each map push the output toward the class I care about?* It
+measures that with the gradient — average `∂(score)/∂Aₖ` over the grid to get one weight
+`αₖ` per map — then forms a weighted sum and keeps only the positive part:
+
+> `heatmap = ReLU( Σₖ αₖ · Aₖ )`, then upsample to the patch size.
+
+The `ReLU` keeps regions that *raise* the score and drops those that lower it. step 6 shows
+**both** directions side by side, in two distinct colormaps: the **CDR-positive** map
+`ReLU(+Σₖ αₖ Aₖ)` (the `jet` colormap, "what pushes this patch toward CDR-positive") and the
+**CDR-negative** map `ReLU(−Σₖ αₖ Aₖ)` (a distinct `cool` colormap, "what pushes it toward
+CDR-negative").
+
+> **Key idea — each map explains a target you choose, not the truth.** Grad-CAM never looks
+> at the correct answer; *you* pick which output to explain. So the CDR-positive map for a
+> *CDR-negative* patch shows **what would make it look more CDR-positive** — not "why it's
+> CDR-negative" (the CDR-negative map answers that). Panel titles carry the true class,
+> coloured **blue = CDR-negative, red = CDR-positive**, next to the model's `P(CDR+)`.
+
+**A single-output wrinkle.** With one logit, "evidence for CDR-positive" and "evidence for
+CDR-negative" are two sides of one coin: the CDR-negative map is `ReLU(−Σₖ αₖ Aₖ)`. That's
+*almost* the negative of the CDR-positive map — but the `ReLU` keeps the opposite lobe, so the
+two maps are **complementary**, not a pure sign flip. (Drop the `ReLU` and show a signed map
+and they *are* exact negatives.) That is why the two panels usually light up *different*
+regions: the CDR-positive (`jet`) panel shows where the CDR-positive-evidence sits, the
+CDR-negative (`cool`) panel where the CDR-negative-evidence sits. If they looked identical,
+something would be wrong — step 6 renders them as a pair precisely so you can read one against
+the other.
+
+**Read it with humility.** The map lives at the last conv layer's resolution — here a
+coarse ~10×8 grid blown up to the whole patch — so it localizes *roughly*, not to the
+pixel. Treat it as a sanity check ("is attention on the hippocampus?"), not a segmentation.
+
+`step6-gradcam.py` loads a trained checkpoint (`model_4a.pt`, saved by step 4), runs a
+sample of patches, and writes **two-panel** overlays (CDR− | CDR+, in two distinct
+colormaps) to `outputs/gradcam/` plus a montage. It also redraws each subject's L/R heatmaps back onto the
+full axial slice as a CDR−-vs-CDR+ pair (`outputs/gradcam_context/`), so you can see
+where in the brain each kind of evidence sits.
+**Method:** Selvaraju et al., *"Grad-CAM: Visual Explanations from Deep Networks via
+Gradient-based Localization"* (ICCV 2017); our implementation is inspired by (not copied
+from) the original [ramprs/grad-cam](https://github.com/ramprs/grad-cam) and a
+[PyTorch backward-hook discussion](https://discuss.pytorch.org/t/grad-cam-implementation-in-pytorch-backward-on-model/3554/7).
+
+---
+
+## 14. Things to play with, or Future Directions
 
 The pipeline is meant to be poked at. Here are experiments you can run — most are a
 one-line change to `config.yaml` or to the `Net` class in a `step4?-train-network.py`
@@ -601,9 +707,9 @@ by editing the `Net` class in a `step4?-train-network.py` file:*
 - **Resize the hippocampus crop.** Widen or tighten the box via `hippocampus.ap` and
   `lr_left` — more context vs. a tighter focus on the structure. (Re-run step 3.)
 - **Trade age range against sample size.** A tighter `cohort.age_min/age_max` makes the
-  healthy and demented groups more comparable but gives you fewer subjects; loosening it
+  CDR-negative and CDR-positive groups more comparable but gives you fewer subjects; loosening it
   does the opposite. Where's the sweet spot?
-- **Balance sex *and* dementia.** Switch `cohort.balance` from `label` to `strict` to
+- **Balance sex *and* CDR status.** Switch `cohort.balance` from `label` to `strict` to
   remove a possible sex confound — at the cost of roughly half the data. Does honest
   validation accuracy go up or down?
 - **Go 3-D.** Feed the whole hippocampus *volume* to a 3-D CNN instead of flat slices —
@@ -611,82 +717,55 @@ by editing the `Net` class in a `step4?-train-network.py` file:*
 - **Try other architectures.** Add residual/skip connections, an attention block, or
   depthwise-separable convolutions and see whether they help on so little data (usually
   the lean nets still win — a good thing to confirm rather than assume).
+- **Try transfer learning.** Instead of training a CNN from scratch, start from a
+  network already pretrained on a large natural-image dataset — e.g. **AlexNet**
+  (the network), pretrained on **ImageNet** (the 1.2-million-image, 1000-category
+  dataset it was trained on) — and adapt it to our task. In practice: keep AlexNet's
+  pretrained convolutional layers — the early ones already know generic features like
+  edges and blobs, which transfer well across domains — and replace only its final
+  classification layer(s) (the "head") with your own, ending in a single logit instead
+  of AlexNet's original 1000-way ImageNet output (§4.6). If you freeze the pretrained
+  backbone and train only the new head, that's called *feature extraction*; unfreezing
+  some of the backbone's later layers too and training them at a small learning rate
+  is called *fine-tuning*. Two wrinkles here: AlexNet expects 3-channel color images
+  at a fixed size (224×224×3), so our grayscale ~58×68 patches would need resizing and
+  channel handling (duplicating the single channel three times, or swapping the first
+  layer) to fit; and since AlexNet's features come from natural photos rather than
+  MRI, the domain gap means transfer helps less here than in typical vision tasks —
+  still worth trying given how starved for data we are (§7).
 - **Vote per subject.** Average (or majority-vote) the left- and right-hippocampus
   predictions into **one guess per person**, as the tutorial does — often a free bump.
 - **Test-time augmentation.** At evaluation, average the prediction over several shifted
   crops of the *same* patch to smooth out noise.
 - **Jitter the intensities.** Add small random brightness/contrast changes to training
   patches (augmentation beyond position).
+- **Augment with rotations and flips.** Beyond the positional random **shifts** we already do
+  (`apply_random_shifts`), add small random **rotations** (a few degrees) and **horizontal
+  mirror flips** of the training patches — standard spatial augmentation that adds pose variety
+  without new data. (We already get a reflection *pair* for free from cropping left **and**
+  right — see §10 — so explicit flips mostly help in combination with rotation and shift.) Keep
+  validation/test **un-augmented** for a clean, deterministic evaluation.
 - **Change the objective.** Try **focal loss** or class weighting for imbalance, or
   predict the **CDR grade** itself (ordinal / multi-class) or regress the **MMSE** score
   instead of a single yes/no.
+- **Report AUC, not just sens/spec.** Add **ROC-AUC** (area under the ROC curve; optionally
+  PR-AUC) to step5's printout and plots — a single **threshold-free** summary of how well the
+  model *ranks* CDR-positive above CDR-negative, complementing the fixed-0.5-threshold
+  sensitivity / specificity / balanced accuracy. The one prerequisite: AUC needs the model's
+  **continuous scores** (probabilities), so step4 would log the per-epoch validation
+  probabilities (or step5 would recompute them from a saved checkpoint) rather than only the
+  thresholded metrics it logs today.
 - **Tune the training loop.** A cosine learning-rate schedule with warmup, or a different
   batch size, can matter as much as the architecture.
 - **Ensemble the four designs.** Average 4a–4d's predictions — ensembles usually beat any
   single member.
 - **Add early stopping.** Keep the *best-validation* checkpoint instead of the last epoch
   (we noted validation peaks early, then drifts down).
-- **Look inside with Grad-CAM** — *now implemented as `step6`* (see §14). It overlays a
+- **Look inside with Grad-CAM** — *now implemented as `step6`* (see §13). It overlays a
   heatmap of where the network looks; a great sanity check that it's reading the
   hippocampus and not a border artifact.
 - **Feed it more data.** Add more `discs`, widen the cohort, or switch `balance` to
   `none` — remembering that *effective* sample size is the number of subjects (§7).
-
----
-
-## 14. Looking inside the model: Grad-CAM (step 6)
-
-A validation number tells you *how often* the model is right, not *why*. For a medical
-model that matters: is it reading the hippocampus, or has it latched onto a scanner
-artifact at the edge of the patch? **Grad-CAM** (Gradient-weighted Class Activation
-Mapping) is a simple way to look.
-
-This is our first step into **interpretability** — moving past *whether* the model is right
-to *what it is actually keying on*. Concretely, Grad-CAM answers: **which parts of this
-patch most steer the decision toward "demented" (label 1)?**
-
-**The idea.** Take the feature maps `Aₖ` from the **last convolution** — the grids fed
-into global average pooling (§4.7). Each lit up wherever some learned pattern was found.
-Grad-CAM asks: *how much does each map push the output toward the class I care about?* It
-measures that with the gradient — average `∂(score)/∂Aₖ` over the grid to get one weight
-`αₖ` per map — then forms a weighted sum and keeps only the positive part:
-
-> `heatmap = ReLU( Σₖ αₖ · Aₖ )`, then upsample to the patch size.
-
-The `ReLU` keeps regions that *raise* the score and drops those that lower it. step 6 shows
-**both** directions side by side, in two distinct colormaps: the **demented** map
-`ReLU(+Σₖ αₖ Aₖ)` (the `jet` colormap, "what pushes this patch toward demented") and the
-**healthy** map `ReLU(−Σₖ αₖ Aₖ)` (a distinct `cool` colormap, "what pushes it toward
-healthy").
-
-> **Key idea — each map explains a target you choose, not the truth.** Grad-CAM never looks
-> at the correct answer; *you* pick which output to explain. So the demented map for a
-> *healthy* patch shows **what would make it look more demented** — not "why it's healthy"
-> (the healthy map answers that). Panel titles carry the true class, coloured **blue =
-> healthy, red = demented**, next to the model's `P(dem)`.
-
-**A single-output wrinkle.** With one logit, "evidence for demented" and "evidence for
-healthy" are two sides of one coin: the healthy map is `ReLU(−Σₖ αₖ Aₖ)`. That's *almost*
-the negative of the demented map — but the `ReLU` keeps the opposite lobe, so the two maps
-are **complementary**, not a pure sign flip. (Drop the `ReLU` and show a signed map and
-they *are* exact negatives.) That is why the two panels usually light up *different*
-regions: the demented (`jet`) panel shows where the demented-evidence sits, the healthy
-(`cool`) panel where the healthy-evidence sits. If they looked identical, something would be
-wrong — step 6 renders them as a pair precisely so you can read one against the other.
-
-**Read it with humility.** The map lives at the last conv layer's resolution — here a
-coarse ~10×8 grid blown up to the whole patch — so it localizes *roughly*, not to the
-pixel. Treat it as a sanity check ("is attention on the hippocampus?"), not a segmentation.
-
-`step6-gradcam.py` loads a trained checkpoint (`model_4a.pt`, saved by step 4), runs a
-sample of patches, and writes **two-panel** overlays (healthy | demented, in two distinct
-colormaps) to `outputs/gradcam/` plus a montage. It also redraws each subject's L/R heatmaps back onto the
-full axial slice as a healthy-vs-demented pair (`outputs/gradcam_context/`), so you can see
-where in the brain each kind of evidence sits.
-**Method:** Selvaraju et al., *"Grad-CAM: Visual Explanations from Deep Networks via
-Gradient-based Localization"* (ICCV 2017); our implementation is inspired by (not copied
-from) the original [ramprs/grad-cam](https://github.com/ramprs/grad-cam) and a
-[PyTorch backward-hook discussion](https://discuss.pytorch.org/t/grad-cam-implementation-in-pytorch-backward-on-model/3554/7).
 
 ---
 
@@ -696,7 +775,7 @@ from) the original [ramprs/grad-cam](https://github.com/ramprs/grad-cam) and a
    if we tune the model against the test set?
 2. Our data has 110 subjects with ~12 patches each. Is the effective amount of
    independent data closer to 1,320 or 110? Why?
-3. A model scores **95 % accuracy** on a group that is 95 % healthy. Should you be
+3. A model scores **95 % accuracy** on a group that is 95 % CDR-negative. Should you be
    impressed? What single number would tell you more, and why?
 4. Designs **4a** and **4b** are the same network except 4a uses dropout and 4b uses
    none. If 4b's *training* accuracy is higher but its *validation* accuracy is lower,
@@ -713,13 +792,13 @@ from) the original [ramprs/grad-cam](https://github.com/ramprs/grad-cam) and a
 - **Voxel** — a 3-D pixel; here 1 voxel = 1 mm of brain.
 - **Slice / plane** — one flat 2-D cross-section of the 3-D brain.
 - **Patch** — the small cropped rectangle around one hippocampus that we feed the model.
-- **Label** — the correct answer (0 healthy / 1 demented), derived from the CDR.
+- **Label** — the correct answer (0 CDR-negative / 1 CDR-positive), derived from the CDR.
 - **Parameter / weight** — an adjustable number inside the network; "learning" tunes these.
 - **Convolution / filter / channel** — a sliding pattern-detector; each filter's output
   grid is a channel.
 - **Pooling** — shrinking the grid (we use 2×2 max-pooling).
 - **ReLU** — activation that zeroes negatives, keeps positives.
-- **Logit** — the network's single raw output; >0 means "predict demented."
+- **Logit** — the network's single raw output; >0 means "predict CDR-positive."
 - **Loss** — a number measuring how wrong the predictions are (we minimize it).
 - **Epoch** — one full pass over the training data.
 - **Learning rate** — the size of each downhill step during training.
@@ -729,8 +808,63 @@ from) the original [ramprs/grad-cam](https://github.com/ramprs/grad-cam) and a
 - **Sensitivity / specificity / balanced accuracy** — honest performance metrics (§6).
 - **Data leakage** — accidentally letting test information influence training (e.g. the
   same subject in two splits), which inflates scores dishonestly.
+- **Cross-validation (k-fold)** — rotating the validation set over *k* subject-level folds
+  and averaging, to get a mean ± error bar instead of one noisy split (§8).
 - **Grad-CAM** — a heatmap of where the network looked to raise a chosen class score;
-  our sanity check that it reads the hippocampus (§14).
+  our sanity check that it reads the hippocampus (§13).
+
+---
+
+## 17. Useful references
+
+These notes mention "the reference tutorial" several times (§10, §11, §12, §14); here it
+is, alongside other background reading, grouped by topic.
+
+**The tutorial this project benchmarks against**
+
+- [Deep Learning for Medical Imaging — hippocampus classification lab](https://aramislab.paris.inria.fr/workshops/DL4MI/2022/notebooks/classification.html)
+  (ARAMIS/Clinica) — the notebook this project's design is compared against throughout,
+  most directly in §11.
+
+**Course notes — background on CNNs**
+
+- [CS231n: Convolutional Neural Networks for Visual Recognition](https://cs231n.github.io/)
+  (Stanford) — particularly [Module 2](https://cs231n.github.io/convolutional-networks/)
+  on ConvNets, which covers §4's convolution/pooling material in more depth.
+- [EECS 498-007 / 598-005: Deep Learning for Computer Vision](https://web.eecs.umich.edu/~justincj/teaching/eecs498/WI2022/)
+  (Justin Johnson, University of Michigan), with
+  [community lecture notes](https://github.com/Andrew-Ng-s-number-one-fan/EECS498-Deep-Learning-for-Computer-Vision).
+
+**Classic papers**
+
+- Krizhevsky, Sutskever, Hinton,
+  ["ImageNet Classification with Deep Convolutional Neural Networks"](https://proceedings.neurips.cc/paper/2012/hash/c399862d3b9d6b76c8436e924a68c45b-Abstract.html)
+  (AlexNet, NeurIPS 2012) — the paper that made CNNs the default tool for image tasks.
+- LeCun, Bengio, Hinton, ["Deep Learning"](https://www.nature.com/articles/nature14539)
+  (Nature, 2015) — a short, high-level review of the field.
+- Srivastava, Hinton, Krizhevsky, Sutskever, Salakhutdinov,
+  ["Dropout: A Simple Way to Prevent Neural Networks from Overfitting"](https://jmlr.org/papers/v15/srivastava14a.html)
+  (JMLR, 2014) — the technique §9 calls "the regularizer that matters most here."
+- Ioffe & Szegedy,
+  ["Batch Normalization: Accelerating Deep Network Training by Reducing Internal Covariate Shift"](https://arxiv.org/abs/1502.03167)
+  (2015) — the BatchNorm layer used throughout (§4.5).
+
+**Medical imaging**
+
+- Yamashita, Nishio, Do, Togashi,
+  ["Convolutional Neural Networks: An Overview and Application in Radiology"](https://link.springer.com/article/10.1007/s13244-018-0639-9)
+  (Insights into Imaging, 2018) — CNNs specifically in the radiology context this
+  project sits in.
+- Marcus et al.,
+  ["Open Access Series of Imaging Studies (OASIS): Cross-Sectional MRI Data in Young, Middle Aged, Nondemented, and Demented Older Adults"](https://pubmed.ncbi.nlm.nih.gov/17714011/)
+  (Journal of Cognitive Neuroscience, 2007) — the paper describing the OASIS-1 dataset
+  this project uses.
+
+**Interpretability**
+
+- Selvaraju et al.,
+  ["Grad-CAM: Visual Explanations from Deep Networks via Gradient-based Localization"](https://arxiv.org/abs/1610.02391)
+  (ICCV 2017) — the method behind step 6's Grad-CAM heatmaps (§13).
 
 ---
 

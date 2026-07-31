@@ -15,6 +15,11 @@ tutorial's CropLeftHC augmentation); validation/test subjects yield just ``2`` (
 evaluation. Patches from one subject always live in the same split, so there is no
 train/test leakage.
 
+For a small sample of subjects per split (``slices.context_samples``), step3 also writes
+**context** images to ``outputs/slice_context/<split>/``: the full axial slice with a
+rectangle around every crop window actually taken from it (train shows all random-shift
+boxes per plane; validation/test show the single box), so the ROI size is visible in situ.
+
 Usage:
     python step3-generate-slices.py [--config config.yaml]
 """
@@ -87,6 +92,72 @@ def save_png(arr: np.ndarray, path: str) -> None:
     Image.fromarray(arr, mode="L").save(path)
 
 
+def pick_context_subjects(members: list[dict], n: int, seed: int) -> set:
+    """Reproducible, label-interleaved sample of up to ``n`` subject ids from a split.
+
+    Interleaving by label keeps both classes represented in the small context sample.
+    """
+    if n <= 0 or not members:
+        return set()
+    rng = random.Random(seed)
+    pools = {0: [m for m in members if int(m["label"]) == 0],
+             1: [m for m in members if int(m["label"]) == 1]}
+    for pool in pools.values():
+        rng.shuffle(pool)
+    picked, i = [], 0
+    while len(picked) < n and (pools[0] or pools[1]):
+        cls = i % 2
+        if pools[cls]:
+            picked.append(pools[cls].pop())
+        elif pools[1 - cls]:
+            picked.append(pools[1 - cls].pop())
+        i += 1
+    return {m["subject"] for m in picked}
+
+
+# Edge colours for the two hippocampus crop boxes drawn on the context images.
+CONTEXT_COLOURS = {"L": "lime", "R": "deepskyblue"}
+
+
+def save_context_image(sl: np.ndarray, windows: dict, bh: int, bw: int,
+                       out_path: str, title: str) -> None:
+    """Draw the full axial slice with a rectangle around every crop window.
+
+    ``windows`` maps side ('L'/'R') -> list of (row0, col0) top-left corners; each box is
+    ``bh`` tall and ``bw`` wide (the fixed patch size). Multiple boxes (train random shifts)
+    are drawn thin and semi-transparent so overlap stays readable; a single box (val/test)
+    is drawn solid.
+    """
+    import matplotlib
+    matplotlib.use("Agg")                        # write files, no interactive window
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Rectangle
+
+    H, W = sl.shape
+    fig, ax = plt.subplots(figsize=(5.0, 5.0 * H / max(W, 1)))
+    ax.imshow(sl, cmap="gray", vmin=0, vmax=255)
+    for side, corners in windows.items():
+        if not corners:
+            continue
+        colour = CONTEXT_COLOURS.get(side, "yellow")
+        many = len(corners) > 1
+        lw = 0.8 if many else 1.6
+        alpha = 0.55 if many else 1.0
+        for j, (r0, c0s) in enumerate(corners):
+            ax.add_patch(Rectangle((c0s, r0), bw, bh, edgecolor=colour, facecolor="none",
+                                   linewidth=lw, alpha=alpha,
+                                   label=(f"{side} hippocampus" if j == 0 else None)))
+    ax.set_xlim(0, W)
+    ax.set_ylim(H, 0)
+    ax.set_axis_off()
+    ax.set_title(title, fontsize=9)
+    ax.legend(loc="lower right", fontsize=7, framealpha=0.6)
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(out_path), exist_ok=True)
+    fig.savefig(out_path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", default="config.yaml")
@@ -119,6 +190,18 @@ def main() -> None:
     all_shifts = [(dx, dy) for dx in range(-random_shift, random_shift + 1)
                            for dy in range(-random_shift, random_shift + 1)]
 
+    # Context images: sample a few subjects per split whose full axial slices we redraw with
+    # rectangles around the actual crop windows (train: every random-shift box per plane;
+    # val/test: the single box). Sampled reproducibly, with a distinct seed per split.
+    seed = config["cohort"]["seed"]
+    context_samples = int(scfg.get("context_samples", 3))
+    context_subjects = {
+        split: pick_context_subjects(splits.get(split, []) or [], context_samples, seed + i)
+        for i, split in enumerate(SPLITS)
+    }
+    context_dir = os.path.join(config["outputs_path"], "slice_context")
+    ctx_count = 0
+
     manifest_path = manifest_yaml(config)
     os.makedirs(os.path.dirname(manifest_path) or ".", exist_ok=True)
 
@@ -133,7 +216,7 @@ def main() -> None:
         for member in splits.get(split, []) or []:
             subject = member["subject"]
             label = int(member["label"])
-            cdr = member.get("cdr")           # AD grade (0.5/1/2) behind label 1
+            cdr = member.get("cdr")           # CDR grade (0.5/1/2) behind label 1
             img_path = member["img_path"]
             if not img_path or not os.path.isfile(img_path):
                 print(f"  [skip] missing image for {subject}: {img_path}")
@@ -165,6 +248,8 @@ def main() -> None:
                     shifts = rng.sample(all_shifts, min(n_shifts, len(all_shifts)))
                 else:
                     shifts = [(0, 0)]
+                is_ctx = subject in context_subjects[split]
+                windows = {"L": [], "R": []}   # crop corners for this plane's context image
                 for side, (c0, c1) in sides.items():
                     seen_positions = set()   # distinct clamped windows -> unique patches
                     a = 0
@@ -178,6 +263,8 @@ def main() -> None:
                         if (r0, c0s) in seen_positions:
                             continue
                         seen_positions.add((r0, c0s))
+                        if is_ctx:
+                            windows[side].append((r0, c0s))
                         patch = sl[r0:r0 + bh, c0s:c0s + bw]   # hippocampus ROI patch
                         slice_shape = patch.shape
                         # Flat per-split folder; label + side + copy index in the name.
@@ -204,17 +291,26 @@ def main() -> None:
                             }
                         )
 
+                if is_ctx:
+                    out_ctx = os.path.join(context_dir, split,
+                                           f"ctx_{subject}_lbl{label}_ax{idx:03d}.png")
+                    nL, nR = len(windows["L"]), len(windows["R"])
+                    ttl = (f"{subject}   {split}   ax{idx} (offset {off:+d} mm)   "
+                           f"L/R boxes: {nL}/{nR}")
+                    save_context_image(sl, windows, bh, bw, out_ctx, ttl)
+                    ctx_count += 1
+
     summary = {
-        split: {"healthy": counts[split][0], "demented": counts[split][1]}
+        split: {"cdr_negative": counts[split][0], "cdr_positive": counts[split][1]}
         for split in SPLITS
     }
     with open(manifest_path, "w") as f:
         yaml.safe_dump({"summary": summary, "slices": rows}, f, sort_keys=False)
 
-    print("\nSlices written per split (healthy / demented):")
+    print("\nSlices written per split (CDR- / CDR+):")
     for split in SPLITS:
         c = counts[split]
-        print(f"  {split:<8} healthy={c[0]:>4}  demented={c[1]:>4}")
+        print(f"  {split:<8} CDR-={c[0]:>4}  CDR+={c[1]:>4}")
     print(f"\nSubjects processed: {subjects}  (skipped: {skipped})")
     print(f"Total slices: {len(rows)}")
     if slice_shape is not None:
@@ -222,6 +318,8 @@ def main() -> None:
         print(f"Slice image size: {w} x {h} px (W x H)")
     print(f"Manifest -> {manifest_path}")
     print(f"PNG tree -> {config['outputs_path']}/<split>/")
+    if ctx_count:
+        print(f"Context images -> {context_dir}/<split>/ ({ctx_count} images)")
 
 
 if __name__ == "__main__":

@@ -28,6 +28,18 @@ discs: [disc1, disc2, disc3, disc4, disc5, disc6, disc7, disc8, disc9, disc10, d
 image_glob: "PROCESSED/MPRAGE/T88_111/*_t88_masked_gfc.img"
 
 # ---------------------------------------------------------------------------
+# Class label display names
+# ---------------------------------------------------------------------------
+# The binary target is derived from CDR (Clinical Dementia Rating):
+#   CDR 0            -> label 0  (cdr_negative)
+#   CDR 0.5 / 1 / 2  -> label 1  (cdr_positive)   [any impairment, severities pooled]
+# These strings are the human-readable class names used in plots and printouts.
+# Cramped plots use the compact forms CDR- / CDR+.
+labels:
+  cdr_negative: "CDR Negative"   # label 0: CDR = 0
+  cdr_positive: "CDR Positive"   # label 1: CDR = 0.5 / 1 / 2
+
+# ---------------------------------------------------------------------------
 # Cohort selection (step2)
 # ---------------------------------------------------------------------------
 cohort:
@@ -35,7 +47,7 @@ cohort:
   age_max: 79            # inclusive
   # Cohort balancing policy (exact counts depend on the age range):
   #   strict -- equal per (sex x label) cell, capped by the smallest cell (fewest subjects)
-  #   label  -- equal healthy/demented, sex left free (~2x strict)
+  #   label  -- equal cdr_negative/cdr_positive, sex left free (~2x strict)
   #   none   -- all eligible subjects, no balancing (most subjects)
   balance: label
   seed: 42               # reproducible sampling + splitting
@@ -58,6 +70,11 @@ slices:
   # 56-68), verified anatomically on the rendered slices.
   offsets_mm: [-27, -26, -25, -24, -23, -22]   # planes used for TRAINING (one patch per plane)
   eval_offset_mm: -24                # the single plane used for VALIDATION and TEST
+  # step3 also draws a few "context" images: the full axial slice with a rectangle around
+  # each hippocampus crop window, so you can SEE the ROI size in situ (train shows every
+  # random-shift box per plane; val/test show the single box). This many subjects per split
+  # are sampled (reproducibly). 0 disables. -> outputs/slice_context/<split>/
+  context_samples: 3
 
 # ---------------------------------------------------------------------------
 # Hippocampus ROI crop (step3)
@@ -70,14 +87,16 @@ slices:
 # mirrored about the L-R centre. The patch is intentionally LARGER than the
 # hippocampus so step4 can random-crop within it later.
 hippocampus:
-  ap: [76, 152]            # A-P rows  -> 76 px tall
-  lr_left: [90, 150]       # L-R cols for the LEFT hippocampus  -> 60 px wide
+  ap: [80, 148]            # A-P rows  -> 68 px tall
+  lr_left: [90, 148]       # L-R cols for the LEFT hippocampus  -> 58 px wide
+  # ap: [76, 152]            # A-P rows  -> 76 px tall
+  # lr_left: [90, 150]       # L-R cols for the LEFT hippocampus  -> 60 px wide
   # Training-only random-shift augmentation (tutorial's CropLeftHC(random_shift)):
   # when `apply_random_shifts` is true, each TRAIN patch is duplicated n_shifts times,
   # each cropped at a random (dx,dy) in [-random_shift, random_shift] voxels. When
   # false, training uses the unshifted box (one patch per plane/side). Validation/test
-  # never shift. random_shift=2 -> (2*2+1)^2 = 25 possible shifts; n_shifts=8 samples 8.
-  # (1 mm voxels here, so +/-2 = +/-2 mm; use 3 to match the tutorial's +/-3 mm.)
+  # never shift. random_shift=3 -> (3*3+1)^2 = 100 possible shifts; n_shifts=8 samples 8.
+  # (1 mm voxels here, so +/-3 = +/-3 mm.)
   apply_random_shifts: true
   random_shift: 3
   n_shifts: 10
@@ -102,7 +121,7 @@ avg_last_epochs: 20      # step5 averages validation metrics over the last N epo
 # Grad-CAM interpretability (step6)
 # ---------------------------------------------------------------------------
 # step6 overlays a heatmap of WHERE a trained model looks to push a patch toward
-# "demented" (label 1). `model` names a checkpoint written by step4; the network
+# CDR-positive (label 1). `model` names a checkpoint written by step4; the network
 # architecture is inferred from the file name (model_4a.pt -> design 4a).
 gradcam:
   model: model_4a.pt      # which step4 checkpoint to explain (defaults to the 4a baseline)

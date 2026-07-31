@@ -7,8 +7,8 @@ brain-masked atlas volume, derives the binary dementia label, and writes a
 tidy ``metadata.csv``.
 
 Label rule (from the OASIS fact sheet):
-    CDR == 0            -> 0  (non-demented / healthy)
-    CDR in {0.5, 1, 2}  -> 1  (demented; all probable AD)
+    CDR == 0            -> 0  (CDR-negative)
+    CDR in {0.5, 1, 2}  -> 1  (CDR-positive; any impairment, clinically probable AD)
     CDR blank           -> left empty (young subjects were not assessed;
                                        step2 excludes these rows)
 
@@ -130,14 +130,14 @@ def write_csv(rows: list[dict], out_path: str) -> None:
 def summarize(rows: list[dict]) -> None:
     total = len(rows)
     with_cdr = sum(1 for r in rows if r["label"] != "")
-    demented = sum(1 for r in rows if r["label"] == 1)
-    healthy = sum(1 for r in rows if r["label"] == 0)
+    cdr_positive = sum(1 for r in rows if r["label"] == 1)
+    cdr_negative = sum(1 for r in rows if r["label"] == 0)
     with_img = sum(1 for r in rows if r["img_exists"])
     in70s = sum(1 for r in rows if r["age"] != "" and 70 <= int(r["age"]) <= 79
                 and r["label"] != "")
     print("\nSummary")
     print(f"  sessions found ............. {total}")
-    print(f"  with CDR (labelled) ........ {with_cdr}  (demented={demented}, healthy={healthy})")
+    print(f"  with CDR (labelled) ........ {with_cdr}  (CDR+={cdr_positive}, CDR-={cdr_negative})")
     print(f"  without CDR (excluded) ..... {total - with_cdr}")
     print(f"  with masked_gfc image ...... {with_img}")
     print(f"  labelled subjects in 70s ... {in70s}")
