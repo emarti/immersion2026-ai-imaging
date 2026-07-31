@@ -15,7 +15,7 @@ It is written as a basic introduction to convolutional neural networks (CNNs) fo
 **[introduction.md](introduction.md)** to explain the ideas and why this project is
 built the way it is. This file explains *how to run it* and *what every setting does*.
 
-The whole project runs as five small Python scripts, in order. Each one reads a single
+The whole project runs as six small Python scripts, in order. Each one reads a single
 settings file, **`config.yaml`**, and writes its results into an `outputs/` folder.
 
 ```
@@ -26,91 +26,172 @@ raw brain scans ─▶ step1 ─▶ step2 ─▶ step3 ─▶ step4 ─▶ step5
 
 ---
 
-## 1. What you need before you start
+## 1. Before you start
 
-1. **The OASIS-1 data.** This is a real dataset of brain MRIs (you download it
-   separately; it is not in this repo). It comes as a set of "discs" (`disc1`,
-   `disc2`, …), each a folder of scan sessions. Each session `OAS1_XXXX_MRy` has:
-   - a text file `OAS1_XXXX_MRy.txt` with the person's age, sex, and clinical scores,
-   - a pre-processed 3-D brain image under `PROCESSED/MPRAGE/T88_111/…_masked_gfc.img`
-     (already aligned to a standard brain template and with the skull removed).
+**For this class we use GitHub Codespaces (Option A below)** — it runs the whole project in
+your web browser with nothing to install. You are also welcome to download everything and run
+it **locally on your own computer** (Option B). Both paths need the two things below.
 
-   The expected folder layout:
+### Get a GitHub account
+Register a free account at https://github.com/signup. You'll use it to open the project in
+Codespaces (Option A) or to download the code (Option B).
 
-   ```
-   <your data root>/
-     disc1/  disc2/  disc3/  …
-       OAS1_XXXX_MRy/
-         OAS1_XXXX_MRy.txt
-         PROCESSED/MPRAGE/T88_111/
-           OAS1_XXXX_MRy_mpr_n{3,4}_anon_111_t88_masked_gfc.img
-   ```
-   > Discs arrive as `.tar.gz` archives — un-tar the ones you want first. The pipeline
-   > uses whatever `disc*` folders it finds.
+### Get the OASIS-1 data
+The brain scans are **not** included in this repo, and they are **not** an anonymous download —
+you request access and agree to a short usage agreement first.
 
-2. **Python 3.13** (3.10–3.14 all work) and the packages in `requirements.txt`.
+1. Go to https://sites.wustl.edu/oasisbrains/home/oasis-1/ and click **"Request Access to
+   Datasets"** (it takes you to https://sites.wustl.edu/oasisbrains/home/access/). Fill in the
+   **OASIS Data Access Form** — your name, institutional email, institution, and a short
+   research statement (its Aims, Methods, and Variables of interest). **OASIS-1** (and OASIS-2)
+   are the open-access tier, so approval is quick; OASIS-3/4 are restricted and not needed here.
+2. **Read the Data Use Agreement carefully.** In short: the data is for **academic,
+   non-commercial** research only; you may **not redistribute** it to others — so **never
+   commit the scans into a repository** (that's why `data/` and `outputs/` are gitignored); you
+   may **not** use the images for face recognition or re-identification; and you must **cite
+   Marcus et al. 2007** (J. Cognitive Neuroscience; doi:10.1162/jocn.2007.19.9.1498) and include
+   the OASIS acknowledgment ("Data were provided by OASIS…").
+3. Once you're approved, the dataset comes as **12 archive files**,
+   `oasis_cross-sectional_disc1.tar.gz … disc12.tar.gz` (~1.5 GB each), from
+   `download.nrg.wustl.edu`. You unzip ("extract") them so you get one `discN/` folder per disc:
+   - one file at a time (macOS/Linux): `tar -xzf oasis_cross-sectional_disc1.tar.gz`
+   - all at once, from the folder holding the archives:
+     `find . -type f -name 'oasis_cross-sectional_disc*.tar.gz' -exec tar -xzf {} \;`
+   - **or extract only the files the pipeline actually uses** — much smaller, since it skips the
+     raw scans and other extras (~5 GB → ~0.5 GB per disc). All it needs is each session's
+     `.txt` plus the masked_gfc volume and its `.hdr`, which you can pull out by pattern. On
+     **macOS** (bsdtar, the default):
+     ```bash
+     tar -xzf oasis_cross-sectional_disc1.tar.gz \
+         '*_t88_masked_gfc.img' '*_t88_masked_gfc.hdr' '*_MR[0-9].txt'
+     ```
+     On **Linux** (GNU tar) add `--wildcards --no-anchored` before the patterns (GNU tar needs
+     them to treat the patterns as globs; bsdtar does that by default):
+     ```bash
+     tar -xzf oasis_cross-sectional_disc1.tar.gz --wildcards --no-anchored \
+         '*_t88_masked_gfc.img' '*_t88_masked_gfc.hdr' '*_MR[0-9].txt'
+     ```
+     (This is exactly what `download-extract-data.sh` does for all 12 discs automatically.)
+   - or use the helper script `download-extract-data.sh`, which downloads **and** extracts all
+     12 for you (needs `wget`). It reads the data location from `oasis1/.env`, so copy
+     `.env.example` → `.env` first (Option A step 3, or Option B). Only use it after your access
+     request is approved and you've agreed to the Data Use Agreement.
+
+However you get them, the files must end up in this layout (the pipeline uses whatever `disc*`
+folders it finds):
+
+```
+<your data root>/          # e.g. the `data/` folder used in the run options below
+  disc1/  disc2/  disc3/  …
+    OAS1_XXXX_MRy/
+      OAS1_XXXX_MRy.txt
+      PROCESSED/MPRAGE/T88_111/
+        OAS1_XXXX_MRy_mpr_n{3,4}_anon_111_t88_masked_gfc.img
+```
 
 ---
 
-## 2. Install
+## 2. Option A — Run in the cloud with GitHub Codespaces
 
-**Option A — plain pip + venv:**
-```bash
-python3.13 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-```
+This is the **class default** and the easiest way — everything runs in your browser, with
+nothing to install. (These steps assume no coding experience.)
 
-**Option B — conda / mamba:**
-```bash
-mamba create -n oasis python=3.13
-mamba activate oasis
-pip install -r requirements.txt
-```
+1. **Log into GitHub** (make a free account first — see §1).
+2. **Open the project in Codespaces:** click
+   https://codespaces.new/emarti/immersion2026-ai-imaging. This opens a full code editor (VS
+   Code) inside your browser — nothing to install; the first load takes a minute or two. If a
+   dialog asks about trusting the workspace, click **"Trust Folder & Continue"**. On the
+   **left** is the *file explorer* (the list of files and folders); along the **bottom** is the
+   *terminal* (a panel where you type commands — if you don't see it, open the top menu
+   **Terminal → New Terminal**).
+3. **Make your settings file, `.env`.** The code reads the data location from a small file
+   called `.env`; you create it by copying the example.
+   - **Using the menus:** in the file explorer open the `oasis1` folder, click `.env.example`
+     to open it, then choose **File → Save As…** and name the copy `.env` (keep it inside
+     `oasis1`).
+   - **Or in the terminal:** type `cd oasis1` and press Enter, then type `cp .env.example .env`
+     and press Enter (`cp` means "copy").
+4. **Check the data path.** Click `.env` in the file explorer to open it. It should already say
+   `DATA_RAW_PATH=/workspaces/immersion2026-ai-imaging/data/`. That's the correct location for
+   Codespaces, so just leave it (if you change anything, save with **Ctrl/Cmd + S**).
+5. **Get the brain scans into that folder** (you must have OASIS access first — see §1). Two
+   ways:
+   - **Automatic (recommended, fastest):** in the terminal, inside `oasis1`, run
+     `bash download-extract-data.sh`. It reads your `.env`, creates the `data` folder, and
+     downloads + unzips all 12 discs straight from WashU. The download is large (~18 GB total)
+     and takes a while — but the script **extracts only the files the pipeline uses** (skipping
+     the rest entirely), so the data ends up ~6 GB instead of ~60 GB (important on Codespaces'
+     limited disk). Run `EXTRACT_ONLY_MASKED=0 bash download-extract-data.sh` to unpack every
+     file.
+   - **Manual:** make a folder named `data` at the top level (click the *new-folder* icon at the
+     top-left of the file explorer, just to the right of **IMMERSION2026-AI-IMAGING**), then
+     drag your files into it. Dragging many files is slow (30 minutes to a few hours).
 
-The packages: `numpy`, `pyyaml`, `python-dotenv`, `pillow`, `nibabel` (reads the brain
-images), `openpyxl` (reads the reference spreadsheet), `torch` + `torchvision` (the
-neural network), and `matplotlib` (the comparison plot).
+   Either way, the result must look like `data/disc1/`, `data/disc2/`, ….
+6. **Install the packages.** In the terminal, from the `oasis1` folder, type
+   `pip install -r requirements.txt` and press Enter — this fetches the Python libraries the
+   code needs (do it once; **no virtualenv or conda is needed in Codespaces**).
+7. **Run the code!** Type `bash process.sh` and press Enter to run the whole pipeline (about
+   20 minutes), or run the steps one at a time — see **§4** below. Progress prints in the
+   terminal, and results appear in `oasis1/outputs/`.
+
+**Managing your codespace.** You can see and reopen your running codespaces at
+https://github.com/codespaces. **Closing the browser tab does *not* stop the session** — it
+keeps running (handy for logging back in later), so when you're finished, **stop or delete** it
+from that page to avoid using up your free monthly hours.
 
 ---
 
-## 3. Point the code at your data
+## 3. Option B — Run locally
 
-The code needs to know where *your* copy of the raw OASIS data lives. That path is
-different on every computer, so it is **not** stored in `config.yaml`. Instead, put it
-in a private file called `.env`:
+Optional — for running on your own computer instead of the cloud. It's a bit more setup: you
+install git and Python yourself.
 
-```bash
-cp .env.example .env
-# then edit .env and set the path to your extracted OASIS folder:
-DATA_RAW_PATH=/path/to/your/oasis
-```
+1. **Install git and download the code.** Install git from https://git-scm.com/downloads. Then,
+   in a terminal, download ("clone") the repo:
+   ```bash
+   git clone https://github.com/emarti/immersion2026-ai-imaging.git
+   cd immersion2026-ai-imaging/oasis1
+   ```
+   (If you've set up SSH keys, you can instead clone with
+   `git pull git@github.com:emarti/immersion2026-ai-imaging.git`.)
 
-If `DATA_RAW_PATH` is not set, the scripts stop immediately with a clear message.
-Everything the pipeline *produces* goes into `./outputs/` (set by `outputs_path` in
-the config) and is safe to delete and regenerate.
+2. **Install Python + the packages.** Use a virtualenv or conda (recommended locally, unlike
+   Codespaces):
+   ```bash
+   # plain pip + venv:
+   python3.13 -m venv .venv
+   source .venv/bin/activate
+   pip install -r requirements.txt
+   ```
+   ```bash
+   # or conda / mamba:
+   mamba create -n oasis python=3.13
+   mamba activate oasis
+   pip install -r requirements.txt
+   ```
+   The packages: `numpy`, `pyyaml`, `python-dotenv`, `pillow`, `nibabel` (reads the brain
+   images), `openpyxl` (reads the reference spreadsheet), `torch` + `torchvision` (the neural
+   network), and `matplotlib` (the comparison plot). (Python 3.13 shown; 3.10–3.14 all work.)
+
+3. **Point the code at your data.** Copy the example settings file and set your data path:
+   ```bash
+   cp .env.example .env
+   # edit .env: the default DATA_RAW_PATH is the Codespaces path, so LOCALLY change it to the
+   # folder that holds your extracted OASIS discs, e.g.:
+   DATA_RAW_PATH=/path/to/your/oasis
+   ```
+   If `DATA_RAW_PATH` is not set, the scripts stop immediately with a clear message. You can
+   fetch the data with `bash download-extract-data.sh` (it downloads into whatever
+   `DATA_RAW_PATH` you set) or manually (see §1). Everything the pipeline *produces* goes into
+   `./outputs/` and is safe to delete and regenerate.
+
+4. **Run the code!** Run `bash process.sh` for the whole pipeline, or run the steps one at a
+   time — see **§4** below.
 
 ---
 
 ## 4. The pipeline, step by step
-
-| Step | Script | What it does | Produces |
-|---|---|---|---|
-| 1 | `step1-gather-metadata.py` | Reads every session's `.txt`, works out age/sex/label, finds the image file, and cross-checks against the official OASIS spreadsheet. | `outputs/metadata.csv` (one row per scan session) |
-| 2 | `step2-assign-groups.py` | Chooses the study **cohort** (which subjects to use) and splits them into **train / validate / test** groups. | `outputs/splits.yaml` |
-| 3 | `step3-generate-slices.py` | For each chosen subject, cuts 2-D **hippocampus patches** (left and right) out of the 3-D brain and saves them as PNG images; also draws a few **context** images showing the crop boxes on the full slice. | `outputs/<split>/*.png` + `outputs/manifest.yaml` + `outputs/slice_context/` |
-| 4 | `step4a … step4d-train-network.py` | Trains **four different CNN designs**, each recording how well it does after every training pass. | `outputs/training_log_4{a,b,c,d}.csv` |
-| 5 | `step5-plot-training.py` | Draws all the designs' learning curves on one figure so you can compare them. | `outputs/training_comparison.png` |
-| 6 | `step6-gradcam.py` | **Grad-CAM**: overlays a heatmap on sample patches showing *where* a trained design looks to call one CDR-positive. | `outputs/gradcam/` + `gradcam_grid.png` |
-
-**The "label"** (what we're trying to predict) comes from the **CDR** (Clinical
-Dementia Rating) in each session's text file: `CDR = 0` → CDR-negative (`0`); `CDR = 0.5,
-1, or 2` → CDR-positive (`1`); a blank CDR (young subjects were never assessed) → the
-subject is skipped.
-
----
-
-## 5. How to run it
 
 Run the whole pipeline at once:
 ```bash
@@ -130,18 +211,34 @@ python step5-plot-training.py
 python step6-gradcam.py          # Grad-CAM heatmaps (needs a model_4?.pt from step4)
 ```
 
-(If you re-run step2 or step3 after changing the config, re-run step3 **and** the
-step4 scripts so the training uses the new images.)
+(If you re-run step2 or step3 after changing the config, re-run step3 **and** the step4
+scripts so the training uses the new images.)
+
+The table below is what each step does and produces:
+
+| Step | Script | What it does | Produces |
+|---|---|---|---|
+| 1 | `step1-gather-metadata.py` | Reads every session's `.txt`, works out age/sex/label, finds the image file, and cross-checks against the official OASIS spreadsheet. | `outputs/metadata.csv` (one row per scan session) |
+| 2 | `step2-assign-groups.py` | Chooses the study **cohort** (which subjects to use) and splits them into **train / validate / test** groups. | `outputs/splits.yaml` |
+| 3 | `step3-generate-slices.py` | For each chosen subject, cuts 2-D **hippocampus patches** (left and right) out of the 3-D brain and saves them as PNG images; also draws a few **context** images showing the crop boxes on the full slice. | `outputs/<split>/*.png` + `outputs/manifest.yaml` + `outputs/slice_context/` |
+| 4 | `step4a … step4d-train-network.py` | Trains **four different CNN designs**, each recording how well it does after every training pass. | `outputs/training_log_4{a,b,c,d}.csv` |
+| 5 | `step5-plot-training.py` | Draws all the designs' learning curves on one figure so you can compare them. | `outputs/training_comparison.png` |
+| 6 | `step6-gradcam.py` | **Grad-CAM**: overlays a heatmap on sample patches showing *where* a trained design looks to call one CDR-positive. | `outputs/gradcam/` + `gradcam_grid.png` |
+
+**The "label"** (what we're trying to predict) comes from the **CDR** (Clinical
+Dementia Rating) in each session's text file: `CDR = 0` → CDR-negative (`0`); `CDR = 0.5,
+1, or 2` → CDR-positive (`1`); a blank CDR (young subjects were never assessed) → the
+subject is skipped.
 
 ---
 
-## 6. The config file — `config.yaml` (read this carefully)
+## 5. The config file — `config.yaml` (read this carefully)
 
 **Everything you can change lives in `config.yaml`.** You should not need to edit the
 Python to run experiments — change a value here and re-run. Below is every setting,
 grouped exactly as in the file, in plain language.
 
-### 6.1 Data locations
+### 5.1 Data locations
 ```yaml
 outputs_path: ./outputs
 reference_xlsx: ./docs/oasis_cross-sectional.xlsx
@@ -159,7 +256,7 @@ image_glob: "PROCESSED/MPRAGE/T88_111/*_t88_masked_gfc.img"
   `*` matches a small naming difference between scans (`n3` vs `n4`), so you don't
   have to care which one a session used.
 
-### 6.2 Cohort selection — *which subjects to include*
+### 5.2 Cohort selection — *which subjects to include*
 ```yaml
 cohort:
   age_min: 60
@@ -195,7 +292,7 @@ cohort:
 - **`max_subjects`** — a cap for quick test runs (`null` = no cap). Set it small to
   make the whole pipeline finish in seconds while you're experimenting.
 
-### 6.3 Slice geometry — *which flat slices to cut*
+### 5.3 Slice geometry — *which flat slices to cut*
 ```yaml
 slices:
   slice_axis: 2
@@ -216,7 +313,7 @@ The 3-D brain is `176 × 208 × 176` voxels (1 voxel = 1 mm). We take **transver
 - **`eval_offset_mm`** — the **single** slice used for **validation and test**. Using
   one fixed slice makes evaluation clean and repeatable (no lucky/unlucky slice).
 
-### 6.4 Hippocampus crop + augmentation — *cut a small box, optionally jiggle it*
+### 5.4 Hippocampus crop + augmentation — *cut a small box, optionally jiggle it*
 ```yaml
 hippocampus:
   ap: [80, 148]
@@ -250,7 +347,7 @@ doubles the amount of data.
 - **`n_shifts`** — how many of those 81 nudged copies to make per training image
   (10 here). Only used when `apply_random_shifts` is `true`.
 
-### 6.5 Splits — *how to divide the subjects*
+### 5.5 Splits — *how to divide the subjects*
 ```yaml
 splits:
   train:    0.70
@@ -261,7 +358,7 @@ The fractions of subjects put into each group. **Splitting is done per subject**
 every slice from one person stays in one group — this prevents the network from
 "cheating" by seeing the same brain in both training and testing.
 
-### 6.6 Training + reporting
+### 5.6 Training + reporting
 ```yaml
 epochs: 100
 avg_last_epochs: 20
@@ -273,7 +370,7 @@ avg_last_epochs: 20
   each design's validation summary (accuracy / sensitivity / specificity / balanced
   accuracy, and the by-grade breakdown).
 
-### 6.7 Grad-CAM (step 6)
+### 5.7 Grad-CAM (step 6)
 ```yaml
 gradcam:
   model: model_4a.pt      # which step4 checkpoint to explain
@@ -296,7 +393,7 @@ Any of these can be overridden on the command line, e.g.
 
 ---
 
-## 7. What the pipeline produces (files & formats)
+## 6. What the pipeline produces (files & formats)
 
 All under `outputs/`:
 
@@ -383,7 +480,7 @@ e.g. `--model model_4c.pt --split test --n 16`. Method + citation are in
 
 ---
 
-## 8. The four CNN designs (step 4)
+## 7. The four CNN designs (step 4)
 
 The four designs are a **teaching sweep**: a shared **baseline** (4a) plus three variants
 that each change exactly **one** thing — so comparing a variant against 4a isolates that
@@ -404,7 +501,7 @@ patch size doesn't matter. What each block and term means is in
 
 ---
 
-## 9. Mini-glossary
+## 8. Mini-glossary
 
 - **Voxel** — a 3-D pixel; here 1 voxel = 1 mm of brain.
 - **Slice / plane** — one flat 2-D cross-section of the 3-D brain.

@@ -701,6 +701,8 @@ by editing the `Net` class in a `step4?-train-network.py` file:*
 
 *Other directions:*
 
+- **Is AI actually useful?** Compare with the original OASIS paper and see whether logistic
+regression on brain size, etc. is a competitive or even better than AI.
 - **Swap the activation.** Replace `ReLU` with `LeakyReLU` (lets a little negative signal
   through) or `GELU` (a smooth modern default) in the `Net` blocks, and see if training
   is steadier.
