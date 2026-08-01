@@ -6,10 +6,11 @@ Reads the per-design CSV logs written by step4a/4b/4c
 training loss, training accuracy, validation loss, validation accuracy, each vs
 epoch -- so the designs can be compared. The validation-accuracy panel also draws a
 running average (a smoothed line over the noisy raw curve) to show the trend. Saves
-``outputs/training_comparison.png``. Also prints each design's average validation
-accuracy / sensitivity / specificity / balanced accuracy over the last 50 epochs,
-plus a breakdown of validation accuracy by CDR grade (0.5 / 1 / 2, pooled under
-label 1). Designs that haven't been run yet are simply skipped.
+``outputs/training_comparison.png``. Also prints -- and saves to
+``outputs/training_summary.txt`` -- each design's average validation accuracy /
+sensitivity / specificity / balanced accuracy over the last 50 epochs, plus a breakdown of
+validation accuracy by CDR grade (0.5 / 1 / 2, pooled under label 1). Designs that haven't
+been run yet are simply skipped.
 
 Usage:
     python step5-plot-training.py
@@ -133,32 +134,47 @@ def main():
     fig.savefig(out, dpi=120)
     print(f"Saved comparison plot ({len(logs)} designs) -> {out}")
 
-    # Summary: average validation metrics over the last N epochs, per design.
+    # Text summary: average validation metrics over the last N epochs, per design. Every line
+    # is both printed to the console and collected (via emit) so it can be saved to a file.
     n_last = config.get("avg_last_epochs", 50)
-    print(f"\nAverage validation metrics over the last {n_last} epochs:")
-    print(f"  {'design':<28} {'acc':>7} {'sens':>7} {'spec':>7} {'bal_acc':>8}")
+    summary_lines = []
+
+    def emit(line=""):
+        print(line)
+        summary_lines.append(line)
+
+    emit()
+    emit(f"Average validation metrics over the last {n_last} epochs:")
+    emit(f"  {'design':<28} {'acc':>7} {'sens':>7} {'spec':>7} {'bal_acc':>8}")
     for label, d in logs:
         acc = tail_mean(d["val_acc"], n_last)
         sens = tail_mean(d["val_sens"], n_last)
         spec = tail_mean(d["val_spec"], n_last)
         bal = tail_mean(d["val_bal_acc"], n_last)
-        print(f"  {label:<28} {acc:>7.3f} {sens:>7.3f} {spec:>7.3f} {bal:>8.3f}")
+        emit(f"  {label:<28} {acc:>7.3f} {sens:>7.3f} {spec:>7.3f} {bal:>8.3f}")
 
     # Breakdown of validation accuracy by CDR grade (0.5/1/2, pooled under label 1),
-    # mean of the last 50 epochs. The validation counts are tiny, so read these as
+    # mean of the last N epochs. The validation counts are tiny, so read these as
     # trends, not precise numbers.
     counts = val_grade_counts(manifest_yaml(config))
-    print(f"\nValidation accuracy by CDR grade (mean of last {n_last} epochs):")
+    emit()
+    emit(f"Validation accuracy by CDR grade (mean of last {n_last} epochs):")
     for g, _, name in GRADE_INFO:
         c = counts[g]
-        print(f"  {name:<20} {c['patches']:>3} patches from {len(c['subjects'])} subject(s)")
-    print(f"  {'design':<28} {'CDR0.5':>7} {'CDR1':>7} {'CDR2':>7}")
+        emit(f"  {name:<20} {c['patches']:>3} patches from {len(c['subjects'])} subject(s)")
+    emit(f"  {'design':<28} {'CDR0.5':>7} {'CDR1':>7} {'CDR2':>7}")
     for label, d in logs:
         cells = []
         for g, col, _ in GRADE_INFO:
             m = tail_mean(d.get(col, []), n_last)
             cells.append(f"{'n/a':>7}" if m != m else f"{m:>7.3f}")   # m != m -> nan
-        print(f"  {label:<28} {cells[0]} {cells[1]} {cells[2]}")
+        emit(f"  {label:<28} {cells[0]} {cells[1]} {cells[2]}")
+
+    # Save the same summary to a text file alongside the plot.
+    summary_path = os.path.join(outputs_path, "training_summary.txt")
+    with open(summary_path, "w") as f:
+        f.write("\n".join(summary_lines).lstrip("\n") + "\n")
+    print(f"\nSaved summary -> {summary_path}")
 
 
 if __name__ == '__main__':
