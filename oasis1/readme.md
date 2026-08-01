@@ -73,9 +73,10 @@ you request access and agree to a short usage agreement first.
      ```
      (This is exactly what `download-extract-data.sh` does for all 12 discs automatically.)
    - or use the helper script `download-extract-data.sh`, which downloads **and** extracts all
-     12 for you (needs `wget`). It reads the data location from `oasis1/.env`, so copy
-     `.env.example` → `.env` first (Option A step 3, or Option B). Only use it after your access
-     request is approved and you've agreed to the Data Use Agreement.
+     12 for you (needs `wget`) and also fetches the OASIS reference spreadsheets + fact sheet
+     into `docs/`. It reads the data location from `oasis1/.env`, so copy `.env.example` →
+     `.env` first (Option A step 3, or Option B). Only use it after your access request is
+     approved and you've agreed to the Data Use Agreement.
 
 However you get them, the files must end up in this layout (the pipeline uses whatever `disc*`
 folders it finds):
@@ -218,8 +219,8 @@ The table below is what each step does and produces:
 
 | Step | Script | What it does | Produces |
 |---|---|---|---|
-| 1 | `step1-gather-metadata.py` | Reads every session's `.txt`, works out age/sex/label, finds the image file, and cross-checks against the official OASIS spreadsheet. | `outputs/metadata.csv` (one row per scan session) |
-| 2 | `step2-assign-groups.py` | Chooses the study **cohort** (which subjects to use) and splits them into **train / validate / test** groups. | `outputs/splits.yaml` |
+| 1 | `step1-gather-metadata.py` | Reads every session's `.txt`, works out age/sex/label, finds the image file, cross-checks against the official OASIS spreadsheet, and plots the age distribution by CDR status for the **whole dataset**. | `outputs/metadata.csv` + `outputs/dataset_age_histograms.png` |
+| 2 | `step2-assign-groups.py` | Chooses the study **cohort** (which subjects to use) and splits them into **train / validate / test** groups; also plots the cohort's age distribution by CDR status. | `outputs/splits.yaml` + `outputs/cohort_age_histograms.png` |
 | 3 | `step3-generate-slices.py` | For each chosen subject, cuts 2-D **hippocampus patches** (left and right) out of the 3-D brain and saves them as PNG images; also draws a few **context** images showing the crop boxes on the full slice. | `outputs/<split>/*.png` + `outputs/manifest.yaml` + `outputs/slice_context/` |
 | 4 | `step4a … step4d-train-network.py` | Trains **four different CNN designs**, each recording how well it does after every training pass. | `outputs/training_log_4{a,b,c,d}.csv` |
 | 5 | `step5-plot-training.py` | Draws all the designs' learning curves on one figure so you can compare them. | `outputs/training_comparison.png` |
@@ -399,8 +400,14 @@ All under `outputs/`:
 
 - **`metadata.csv`** — one row per scan session: `subject, disc, age, sex, cdr, mmse,
   label, img_path, img_exists`. This is just the hand-off from step 1 to step 2.
+- **`dataset_age_histograms.png`** — step 1's age distribution of CDR-negative vs CDR-positive
+  over the **entire dataset** (all ages), in three panels (both sexes pooled, sexes separated,
+  and by raw CDR grade). Shows the two age clusters and the age/sex confound at a glance.
 - **`splits.yaml`** — the chosen cohort and its train/validate/test assignment, plus a
   `meta` summary (which balancing mode, total subjects, counts per split).
+- **`cohort_age_histograms.png`** — step 2's version of the same three panels, but restricted
+  to the configured **`age_min`–`age_max`** range (the eligible cohort) — useful for checking
+  how balanced the classes look within the age band you chose.
 - **`manifest.yaml`** — the master list of every generated patch. Each entry records
   `png_path, img_path, subject, split, label, cdr, slice_index, offset_mm, side` (L/R),
   and `shift_x/shift_y` (the augmentation nudge, `0` when off). `cdr` is the raw
@@ -520,3 +527,16 @@ patch size doesn't matter. What each block and term means is in
 For the *why* behind all of these choices — CNNs, overfitting, the balancing modes,
 the hippocampus focus, the design sweep, and how this compares to the tutorial it's
 based on — see **[introduction.md](introduction.md)**.
+
+---
+
+## License & data use
+
+- **Code and written materials** in this repository are released under the **MIT License**
+  (see [LICENSE](../LICENSE)) — free to use, modify, and share, with attribution. The CNN is
+  adapted from PyTorch's MNIST example (BSD-3-Clause).
+- **The OASIS-1 data is *not* covered by this license and is *not* included here.** It is
+  provided by OASIS under its own **Data Use Agreement** (academic, non-commercial; no
+  redistribution). Request access and download it yourself — see §1. The OASIS reference
+  spreadsheets and fact sheet are likewise not redistributed in this repo;
+  `download-extract-data.sh` fetches them from the OASIS site into `docs/`.

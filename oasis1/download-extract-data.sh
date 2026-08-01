@@ -8,7 +8,9 @@
 # `tar` -- both present on Linux / Codespaces; on macOS install wget via Homebrew, or download
 # the discs manually (see readme.md). The download is large and slow (~1.5 GB per disc, 12
 # discs); `wget -c` resumes partial files if you re-run. By default it EXTRACTS ONLY the files
-# the pipeline uses (~63 GB -> ~6 GB); set EXTRACT_ONLY_MASKED=0 to unpack every file.
+# the pipeline uses (~63 GB -> ~6 GB); set EXTRACT_ONLY_MASKED=0 to unpack every file. It also
+# fetches the OASIS reference spreadsheets + fact sheet into docs/ (these are OASIS materials,
+# not redistributed in the repo).
 #
 # Use this ONLY after your OASIS access request is approved and you have agreed to the OASIS
 # Data Use Agreement (academic / non-commercial use; no redistribution). See readme.md, §1.
@@ -59,6 +61,23 @@ extract_only_masked() {
     # empty-array expansion safe under `set -u` on macOS's bash 3.2.
     tar -xzf "$1" ${tar_glob[@]+"${tar_glob[@]}"} "${keep_patterns[@]}"
 }
+
+# Fetch the OASIS reference spreadsheets + fact sheet into docs/ (step1 cross-checks
+# metadata.csv against oasis_cross-sectional.xlsx). These are OASIS materials we do NOT
+# redistribute in the repo (OASIS DUA), so they are downloaded from the OASIS site here. The
+# download URLs carry a hash suffix, so save each under the name the pipeline expects.
+docs_dir="$script_dir/docs"
+mkdir -p "$docs_dir"
+docs=(
+    "oasis_cross-sectional.xlsx|https://sites.wustl.edu/oasisbrains/files/2024/04/oasis_cross-sectional-5708aa0a98d82080.xlsx"
+    "oasis_cross-sectional-reliability.xlsx|https://sites.wustl.edu/oasisbrains/files/2024/04/oasis_cross-sectional-reliability-063c8642b909ee76.xlsx"
+    "oasis_cross-sectional_facts.pdf|https://sites.wustl.edu/oasisbrains/files/2024/03/oasis_cross-sectional_facts-bcc7a002dfb104f4.pdf"
+)
+for entry in "${docs[@]}"; do
+    name="${entry%%|*}"; url="${entry#*|}"
+    echo "== Downloading docs/${name} =="
+    wget -O "$docs_dir/$name" "$url"
+done
 
 mkdir -p "$data_dir"
 cd "$data_dir"

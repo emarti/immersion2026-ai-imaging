@@ -2,3 +2,8 @@
 .env
 __pycache__/
 *.pyc
+
+# OASIS reference spreadsheets + fact sheet -- OASIS data, NOT redistributed here (OASIS
+# Data Use Agreement). download-extract-data.sh fetches them from the OASIS site into docs/.
+**/docs/oasis_cross-sectional*.xlsx
+**/docs/oasis_cross-sectional*.pdf

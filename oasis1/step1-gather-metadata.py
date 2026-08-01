@@ -4,7 +4,9 @@
 Walks every ``disc*/OAS1_XXXX_MRy/OAS1_XXXX_MRy.txt`` under the configured data
 root, parses age / sex / CDR (and MMSE for reference), locates the matching
 brain-masked atlas volume, derives the binary dementia label, and writes a
-tidy ``metadata.csv``.
+tidy ``metadata.csv``. It also saves ``outputs/dataset_age_histograms.png`` -- CDR-negative
+vs CDR-positive counts by age over the *entire* dataset (step2 makes the same plot restricted
+to the cohort's age range).
 
 Label rule (from the OASIS fact sheet):
     CDR == 0            -> 0  (CDR-negative)
@@ -235,6 +237,91 @@ def validate_against_reference(rows: list[dict], xlsx_path: str) -> None:
         print(f"  {len(only_meta) + len(only_ref) + total_diffs} discrepancy(ies) found (see above)")
 
 
+def plot_age_histograms(rows: list[dict], out_path: str, labels_cfg: dict) -> None:
+    """Save a 3-panel age histogram of CDR-negative vs CDR-positive over the ENTIRE dataset.
+
+    (Deliberately duplicated from step2's near-identical plot -- this teaching project keeps the
+    two steps self-contained. step1 shows every labelled subject at any age; step2 restricts the
+    same plot to the cohort's age_min..age_max range.) Panels: (1) both sexes pooled; (2) sexes
+    separated (line style); (3) raw CDR grade (0 / 0.5 / 1 / 2) separated.
+
+    Note: step1's rows hold native types (int age, int label, bool img_exists, float cdr),
+    unlike step2 which reads strings back from metadata.csv.
+    """
+    import matplotlib
+    matplotlib.use("Agg")                 # write a file, no interactive window
+    import matplotlib.pyplot as plt
+    from matplotlib.ticker import MaxNLocator
+    import numpy as np
+
+    plt.style.use("seaborn-v0_8-darkgrid")
+
+    recs = []
+    for r in rows:
+        if r["label"] not in (0, 1):                 # native ints ("" excluded)
+            continue
+        if not r["img_exists"] or r["age"] == "" or r["sex"] not in ("M", "F"):
+            continue
+        try:
+            age, cdr = int(r["age"]), float(r["cdr"])
+        except (ValueError, TypeError):
+            continue
+        recs.append((age, r["sex"], int(r["label"]), cdr))
+    if not recs:
+        print("  [skip] no labelled subjects with images to plot age histograms")
+        return
+
+    ages = np.array([a for a, _, _, _ in recs])
+    sexes = np.array([s for _, s, _, _ in recs])
+    labels = np.array([l for _, _, l, _ in recs])
+    cdrs = np.array([c for _, _, _, c in recs])
+
+    edges = np.arange((ages.min() // 5) * 5, ((ages.max() // 5) + 1) * 5 + 1, 5)  # 5-yr bins
+    neg_name = labels_cfg.get("cdr_negative", "CDR Negative")
+    pos_name = labels_cfg.get("cdr_positive", "CDR Positive")
+    C_NEG, C_POS = "steelblue", "crimson"          # CDR- = blue / CDR+ = red, as elsewhere
+
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4.6), sharex=True)
+
+    # (1) both sexes pooled
+    ax1.hist(ages[labels == 0], bins=edges, histtype="stepfilled", alpha=0.55,
+             color=C_NEG, label=neg_name)
+    ax1.hist(ages[labels == 1], bins=edges, histtype="stepfilled", alpha=0.55,
+             color=C_POS, label=pos_name)
+    ax1.set(title="CDR status vs age (both sexes)", xlabel="age (years)", ylabel="subjects")
+    ax1.legend(fontsize=8)
+
+    # (2) sexes separated (colour = CDR, solid = Male / dashed = Female)
+    for lbl, colour, name in ((0, C_NEG, neg_name), (1, C_POS, pos_name)):
+        for sex, ls, sname in (("M", "-", "Male"), ("F", "--", "Female")):
+            m = (labels == lbl) & (sexes == sex)
+            if m.any():
+                ax2.hist(ages[m], bins=edges, histtype="step", linewidth=1.6,
+                         color=colour, linestyle=ls, label=f"{name} · {sname}")
+    ax2.set(title="CDR status vs age (sexes separated)", xlabel="age (years)")
+    ax2.legend(fontsize=7)
+
+    # (3) raw CDR grade separated (both sexes pooled)
+    grade_colours = {0.0: "steelblue", 0.5: "gold", 1.0: "darkorange", 2.0: "crimson"}
+    for g in (0.0, 0.5, 1.0, 2.0):
+        m = cdrs == g
+        if m.any():
+            ax3.hist(ages[m], bins=edges, histtype="step", linewidth=1.8,
+                     color=grade_colours[g], label=f"CDR {g:g}")
+    ax3.set(title="CDR grade vs age (both sexes)", xlabel="age (years)")
+    ax3.legend(fontsize=8)
+
+    for ax in (ax1, ax2, ax3):                      # integer counts -> integer y ticks
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+
+    fig.suptitle("OASIS-1 age distribution by CDR status -- entire dataset "
+                 "(all labelled subjects with an image)", fontsize=11)
+    fig.tight_layout(rect=(0, 0, 1, 0.96))
+    fig.savefig(out_path, dpi=120)
+    plt.close(fig)
+    print(f"Saved age histograms -> {out_path}")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", default="config.yaml")
@@ -250,6 +337,11 @@ def main() -> None:
     write_csv(rows, out_path)
     summarize(rows)
     print(f"\nWrote {len(rows)} rows -> {out_path}")
+
+    outputs_path = config["outputs_path"]
+    os.makedirs(outputs_path, exist_ok=True)
+    plot_age_histograms(rows, os.path.join(outputs_path, "dataset_age_histograms.png"),
+                        config.get("labels") or {})
 
     if not args.skip_validate:
         validate_against_reference(rows, reference_xlsx(config))

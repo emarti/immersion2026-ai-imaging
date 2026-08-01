@@ -43,8 +43,8 @@ labels:
 # Cohort selection (step2)
 # ---------------------------------------------------------------------------
 cohort:
-  age_min: 60            # inclusive
-  age_max: 79            # inclusive
+  age_min: 65            # inclusive
+  age_max: 85            # inclusive
   # Cohort balancing policy (exact counts depend on the age range):
   #   strict -- equal per (sex x label) cell, capped by the smallest cell (fewest subjects)
   #   label  -- equal cdr_negative/cdr_positive, sex left free (~2x strict)
