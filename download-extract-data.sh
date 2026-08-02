@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # download-extract-data.sh -- OPTIONAL: download + extract the OASIS-1 cross-sectional
-# discs (1-12) into the folder named by DATA_RAW_PATH in oasis1/.env.
+# discs (1-12) into the folder named by DATA_RAW_PATH in .env (at the repository root).
 #
 # This is NOT part of process.sh. It's a convenience for grabbing the raw data, especially
 # inside GitHub Codespaces (pulls straight from WashU, no local upload). Requires `wget` and
@@ -9,13 +9,13 @@
 # the discs manually (see readme.md). The download is large and slow (~1.5 GB per disc, 12
 # discs); `wget -c` resumes partial files if you re-run. By default it EXTRACTS ONLY the files
 # the pipeline uses (~63 GB -> ~6 GB); set EXTRACT_ONLY_MASKED=0 to unpack every file. It also
-# fetches the OASIS reference spreadsheets + fact sheet into docs/ (these are OASIS materials,
-# not redistributed in the repo).
+# fetches the OASIS reference spreadsheets + fact sheet into <DATA_RAW_PATH>/docs/, beside the
+# discs (these are OASIS materials, not redistributed in the repo).
 #
 # Use this ONLY after your OASIS access request is approved and you have agreed to the OASIS
 # Data Use Agreement (academic / non-commercial use; no redistribution). See readme.md, §1.
 #
-# Usage (from the oasis1 folder):   bash download-extract-data.sh
+# Usage (from the repository root):   bash download-extract-data.sh
 set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -62,11 +62,13 @@ extract_only_masked() {
     tar -xzf "$1" ${tar_glob[@]+"${tar_glob[@]}"} "${keep_patterns[@]}"
 }
 
-# Fetch the OASIS reference spreadsheets + fact sheet into docs/ (step1 cross-checks
-# metadata.csv against oasis_cross-sectional.xlsx). These are OASIS materials we do NOT
-# redistribute in the repo (OASIS DUA), so they are downloaded from the OASIS site here. The
-# download URLs carry a hash suffix, so save each under the name the pipeline expects.
-docs_dir="$script_dir/docs"
+# Fetch the OASIS reference spreadsheets + fact sheet into a docs/ folder beside the discs
+# (step1 cross-checks metadata.csv against oasis_cross-sectional.xlsx; config.yaml's
+# reference_xlsx is resolved relative to DATA_RAW_PATH). These are OASIS materials we do NOT
+# redistribute in the repo (OASIS DUA), so they are downloaded from the OASIS site here and
+# kept out of the checkout entirely. The download URLs carry a hash suffix, so save each under
+# the name the pipeline expects. mkdir -p creates $data_dir on the way.
+docs_dir="$data_dir/docs"
 mkdir -p "$docs_dir"
 docs=(
     "oasis_cross-sectional.xlsx|https://sites.wustl.edu/oasisbrains/files/2024/04/oasis_cross-sectional-5708aa0a98d82080.xlsx"
@@ -75,7 +77,7 @@ docs=(
 )
 for entry in "${docs[@]}"; do
     name="${entry%%|*}"; url="${entry#*|}"
-    echo "== Downloading docs/${name} =="
+    echo "== Downloading ${docs_dir}/${name} =="
     wget -O "$docs_dir/$name" "$url"
 done
 

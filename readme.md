@@ -10,6 +10,13 @@ MRI** and guess whether the person is **CDR-positive** (label `1`) or **CDR-nega
 > impairment, severities pooled). These are clinical-severity classes, *not* biomarker-
 > confirmed diagnoses — so we deliberately avoid stigmatizing or diagnosis-implying names
 > for the two classes and label them by their CDR status instead.
+>
+> That distinction is worth more than a disclaimer. In biomedical work the thing you actually
+> care about is often the thing you *cannot* measure — it needs a biopsy, a PET scan, an
+> autopsy, or simply wasn't recorded — so datasets label with an available **proxy** instead.
+> Ours is CDR. This model can learn to predict a clinician's rating of impairment; it cannot
+> learn to detect Alzheimer's disease, because nothing in this dataset tells it what that is.
+> [introduction.md](introduction.md) §1 works through the consequences.
 
 It is written as a basic introduction to convolutional neural networks (CNNs) for biological imaging, while it might not win a competition. Read
 **[introduction.md](introduction.md)** to explain the ideas and why this project is
@@ -73,10 +80,20 @@ you request access and agree to a short usage agreement first.
      ```
      (This is exactly what `download-extract-data.sh` does for all 12 discs automatically.)
    - or use the helper script `download-extract-data.sh`, which downloads **and** extracts all
-     12 for you (needs `wget`) and also fetches the OASIS reference spreadsheets + fact sheet
-     into `docs/`. It reads the data location from `oasis1/.env`, so copy `.env.example` →
-     `.env` first (Option A step 3, or Option B). Only use it after your access request is
-     approved and you've agreed to the Data Use Agreement.
+     12 for you and also fetches the OASIS reference spreadsheets + fact sheet into a `docs/`
+     folder beside the discs. It reads the data location from `.env`, so copy
+     `.env.example` → `.env` first (Option A step 3, or Option B). Only use it after your
+     access request is approved and you've agreed to the Data Use Agreement.
+
+     **That script needs `wget`**, a small command-line downloader. Codespaces (Option A) and
+     most Linux machines already have it; **macOS does not**. On a Mac, pick whichever is
+     easiest for you:
+     - **Homebrew** — install Homebrew from https://brew.sh, then run `brew install wget`.
+     - **conda / mamba** — if you're setting up an environment anyway (Option B, step 2), run
+       `mamba install -c conda-forge wget` (or `conda install -c conda-forge wget`).
+     - **Or skip it entirely** — download the 12 archives by hand from the OASIS site and
+       extract them with `tar`, as described in the bullets above. Nothing else in this
+       project needs `wget`, so this costs you only the convenience of the script.
 
 However you get them, the files must end up in this layout (the pipeline uses whatever `disc*`
 folders it finds):
@@ -88,6 +105,10 @@ folders it finds):
       OAS1_XXXX_MRy.txt
       PROCESSED/MPRAGE/T88_111/
         OAS1_XXXX_MRy_mpr_n{3,4}_anon_111_t88_masked_gfc.img
+  docs/                    # the OASIS reference materials (optional; step 1 only
+    oasis_cross-sectional.xlsx              #   uses the first one, as a sanity check)
+    oasis_cross-sectional-reliability.xlsx
+    oasis_cross-sectional_facts.pdf
 ```
 
 ---
@@ -107,17 +128,16 @@ nothing to install. (These steps assume no coding experience.)
    **Terminal → New Terminal**).
 3. **Make your settings file, `.env`.** The code reads the data location from a small file
    called `.env`; you create it by copying the example.
-   - **Using the menus:** in the file explorer open the `oasis1` folder, click `.env.example`
-     to open it, then choose **File → Save As…** and name the copy `.env` (keep it inside
-     `oasis1`).
-   - **Or in the terminal:** type `cd oasis1` and press Enter, then type `cp .env.example .env`
-     and press Enter (`cp` means "copy").
+   - **Using the menus:** in the file explorer click `.env.example` (it's in the top-level
+     list, alongside `config.yaml` and the `step…` files) to open it, then choose
+     **File → Save As…** and name the copy `.env`, keeping it in that same top-level folder.
+   - **Or in the terminal:** type `cp .env.example .env` and press Enter (`cp` means "copy").
 4. **Check the data path.** Click `.env` in the file explorer to open it. It should already say
    `DATA_RAW_PATH=/workspaces/immersion2026-ai-imaging/data/`. That's the correct location for
    Codespaces, so just leave it (if you change anything, save with **Ctrl/Cmd + S**).
 5. **Get the brain scans into that folder** (you must have OASIS access first — see §1). Two
    ways:
-   - **Automatic (recommended, fastest):** in the terminal, inside `oasis1`, run
+   - **Automatic (recommended, fastest):** in the terminal, run
      `bash download-extract-data.sh`. It reads your `.env`, creates the `data` folder, and
      downloads + unzips all 12 discs straight from WashU. The download is large (~18 GB total)
      and takes a while — but the script **extracts only the files the pipeline uses** (skipping
@@ -129,12 +149,12 @@ nothing to install. (These steps assume no coding experience.)
      drag your files into it. Dragging many files is slow (30 minutes to a few hours).
 
    Either way, the result must look like `data/disc1/`, `data/disc2/`, ….
-6. **Install the packages.** In the terminal, from the `oasis1` folder, type
-   `pip install -r requirements.txt` and press Enter — this fetches the Python libraries the
-   code needs (do it once; **no virtualenv or conda is needed in Codespaces**).
+6. **Install the packages.** In the terminal, type `pip install -r requirements.txt` and press
+   Enter — this fetches the Python libraries the code needs (do it once; **no virtualenv or
+   conda is needed in Codespaces**).
 7. **Run the code!** Type `bash process.sh` and press Enter to run the whole pipeline (about
    20 minutes), or run the steps one at a time — see **§4** below. Progress prints in the
-   terminal, and results appear in `oasis1/outputs/`.
+   terminal, and results appear in `outputs/`.
 
 **Managing your codespace.** You can see and reopen your running codespaces at
 https://github.com/codespaces. **Closing the browser tab does *not* stop the session** — it
@@ -152,7 +172,7 @@ install git and Python yourself.
    in a terminal, download ("clone") the repo:
    ```bash
    git clone https://github.com/emarti/immersion2026-ai-imaging.git
-   cd immersion2026-ai-imaging/oasis1
+   cd immersion2026-ai-imaging
    ```
    (If you've set up SSH keys, you can instead clone with
    `git pull git@github.com:emarti/immersion2026-ai-imaging.git`.)
@@ -206,8 +226,8 @@ python step2-assign-groups.py
 python step3-generate-slices.py
 python step4a-train-network.py   # baseline 8-16-32, dropout 0.6/0.2
 python step4b-train-network.py   # 8-16-32, no dropout
-python step4c-train-network.py   # wider 16-32-64, dropout 0.6/0.2
-python step4d-train-network.py   # shallower 8-16 (2 blocks), dropout 0.6/0.2
+python step4c-train-network.py   # wider 32-64-128, 5x5 first filter, dropout 0.6/0.2
+python step4d-train-network.py   # shallower 8-16 (2 blocks), dropout 0.4/0.2
 python step5-plot-training.py
 python step6-gradcam.py          # Grad-CAM heatmaps (needs a model_4?.pt from step4)
 ```
@@ -242,15 +262,18 @@ grouped exactly as in the file, in plain language.
 ### 5.1 Data locations
 ```yaml
 outputs_path: ./outputs
-reference_xlsx: ./docs/oasis_cross-sectional.xlsx
+reference_xlsx: docs/oasis_cross-sectional.xlsx
 discs: [disc1, disc2, …, disc12]
 image_glob: "PROCESSED/MPRAGE/T88_111/*_t88_masked_gfc.img"
 ```
 - **`outputs_path`** — the folder where all generated files go. Everything under it
   can be safely deleted; the pipeline recreates it.
-- **`reference_xlsx`** — the official OASIS spreadsheet (shipped in `docs/`). Step 1
-  double-checks its own metadata against this and reports any mismatch (it never
-  stops the run — it's a sanity check).
+- **`reference_xlsx`** — the official OASIS spreadsheet. It is **not** shipped in this
+  repo (OASIS materials aren't redistributed here); `download-extract-data.sh` fetches
+  it into a `docs/` folder **beside your discs**, which is why this path is relative to
+  your data root (`DATA_RAW_PATH`) rather than to the code. Step 1 double-checks its own
+  metadata against this and reports any mismatch — it never stops the run, and if the
+  file isn't there the check is simply skipped.
 - **`discs`** — the list of disc folder names to look inside. Names not present on
   disk are simply skipped.
 - **`image_glob`** — the file pattern for the brain image inside each session. The
@@ -336,7 +359,7 @@ doubles the amount of data.
   **training** crop is made several times, each nudged by a small random amount — this
   teaches the network to not depend on the exact position. When `false`, the
   box is used as-is. Validation/test are **never** shifted.
-  > **What we found (see [lab-notes.md](lab-notes.md)).** Because each training image
+  > **What we found (see [lab-notes.md](internal/lab-notes.md)).** Because each training image
   > becomes `n_shifts` copies (10 here), the training set and the **time per epoch grow
   > ~10×**. In our runs it **mainly helps smaller / leaner networks** and does **not
   > appreciably raise** the headline balanced accuracy; stacked on very high dropout in
@@ -498,8 +521,8 @@ effect. Together they sample three different directions: dropout, width, and dep
 |---|---|---|---|
 | **4a** | 8→16→32 (3) | 0.6 / 0.2 | baseline (~8.2k params) |
 | **4b** | 8→16→32 (3) | 0.0 / 0.0 | no dropout → overfitting demo |
-| **4c** | 16→32→64 (3) | 0.6 / 0.2 | wider (~28k params) |
-| **4d** | 8→16 (2) | 0.6 / 0.2 | shallower (~2.4k params) |
+| **4c** | 32→64→128 (3), 5×5 first | 0.6 / 0.2 | wider (~102k params, 12× the baseline) |
+| **4d** | 8→16 (2), 32-unit head | 0.4 / 0.2 | smaller (~1.9k params) |
 
 All use one output number (a "logit"), `BCEWithLogitsLoss`, the `AdamW` optimizer with
 learning rate `1e-4`, batch size 32, and a global-average-pooling head so the exact
@@ -530,13 +553,60 @@ based on — see **[introduction.md](introduction.md)**.
 
 ---
 
+## 9. The Jupyter notebooks (optional)
+
+Two extra notebooks live in `jupyter/`. They are **not** part of `process.sh` and they never
+write to `outputs/` — they read the OASIS spreadsheet directly and ask questions the pipeline
+itself can't:
+
+| Notebook | The question it asks |
+|---|---|
+| `jupyter/nWBV.ipynb` | How well does a single number — whole-brain volume — predict CDR status? |
+| `jupyter/age_confounder.ipynb` | How much of CDR status is predictable from **age alone**, with no brain scan at all? |
+
+They need two packages beyond the pipeline's, `ipykernel` and `scikit-learn`. Both are already
+in `requirements.txt`, so if you followed §2 or §3 you have them.
+
+### Opening a notebook in VS Code
+
+Click the `.ipynb` file in the file explorer. It opens as a stack of *cells*; press
+**Shift + Enter** to run the cell you're on, or click **Run All** at the top to run everything
+in order.
+
+Before any cell runs, VS Code needs to know **which Python** to use — that choice is called the
+*kernel*. Click **Select Kernel** at the top right, then:
+
+- **In Codespaces (Option A):** pick the one Python listed under **Python Environments**.
+  `pip install -r requirements.txt` already put the packages there, and there is no `oasis`
+  environment in Codespaces — so there is nothing else to set up.
+- **Locally with conda/mamba (Option B):** pick the environment named **`oasis`**. VS Code
+  discovers conda environments on its own, as long as `ipykernel` is installed inside them.
+
+### If `oasis` doesn't show up in that list (local only)
+
+Register it by hand. **Activate the environment first** — this step matters, because the command
+registers whichever Python is active *right now* under the name you give it. Run it from the
+wrong environment and you get a kernel labelled "oasis" that is actually some other Python:
+
+```bash
+mamba activate oasis
+python -m ipykernel install --user --name=oasis --display-name="Oasis (Python 3.13.14)"
+```
+
+Reopen the notebook and it appears in the list as *Oasis (Python 3.13.14)*. `--name` is the
+internal id; `--display-name` is just the label you see, so if you later upgrade the
+environment's Python, re-run the command to refresh it — the label is fixed text and won't
+update itself.
+
+---
+
 ## License & data use
 
 - **Code and written materials** in this repository are released under the **MIT License**
-  (see [LICENSE](../LICENSE)) — free to use, modify, and share, with attribution. The CNN is
+  (see [LICENSE](LICENSE)) — free to use, modify, and share, with attribution. The CNN is
   adapted from PyTorch's MNIST example (BSD-3-Clause).
 - **The OASIS-1 data is *not* covered by this license and is *not* included here.** It is
   provided by OASIS under its own **Data Use Agreement** (academic, non-commercial; no
   redistribution). Request access and download it yourself — see §1. The OASIS reference
   spreadsheets and fact sheet are likewise not redistributed in this repo;
-  `download-extract-data.sh` fetches them from the OASIS site into `docs/`.
+  `download-extract-data.sh` fetches them from the OASIS site into `<your data root>/docs/`.

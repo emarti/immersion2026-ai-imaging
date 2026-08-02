@@ -13,10 +13,17 @@
 # which is gitignored.
 outputs_path: ./outputs
 
-# The official OASIS-1 cross-sectional spreadsheet, shipped in the repo. step1
-# cross-checks the metadata.csv it derives from the per-session .txt files against
-# this reference and reports any discrepancies (non-fatal).
-reference_xlsx: ./docs/oasis_cross-sectional.xlsx
+# The official OASIS-1 cross-sectional spreadsheet, used by step1 as a sanity check: it
+# cross-checks the metadata.csv it derives from the per-session .txt files against this
+# reference and reports any discrepancies. Non-fatal -- if the file is missing, the check
+# is simply skipped, and the rest of the pipeline runs normally.
+#
+# CAREFUL: this path is relative to your RAW DATA root, *not* to this repo. It expands to
+#     $DATA_RAW_PATH/docs/oasis_cross-sectional.xlsx
+# The spreadsheet is OASIS material we do not redistribute, so it is not in the repo at
+# all -- download-extract-data.sh fetches it from the OASIS site into a docs/ folder
+# beside the discs. (An absolute path here is also accepted, and overrides all of this.)
+reference_xlsx: docs/oasis_cross-sectional.xlsx
 
 # One folder per DVD is expected under the raw root; each must be un-tarred
 # manually before it is picked up here.
@@ -43,8 +50,8 @@ labels:
 # Cohort selection (step2)
 # ---------------------------------------------------------------------------
 cohort:
-  age_min: 65            # inclusive
-  age_max: 85            # inclusive
+  age_min: 60            # inclusive
+  age_max: 79            # inclusive
   # Cohort balancing policy (exact counts depend on the age range):
   #   strict -- equal per (sex x label) cell, capped by the smallest cell (fewest subjects)
   #   label  -- equal cdr_negative/cdr_positive, sex left free (~2x strict)

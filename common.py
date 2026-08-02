@@ -67,12 +67,16 @@ def metadata_csv(config: dict) -> str:
 def reference_xlsx(config: dict) -> str:
     """Absolute path to the OASIS cross-sectional reference spreadsheet.
 
-    Resolved relative to the repo root when the config value is not absolute, so
-    the default ``./docs/...`` works regardless of the current directory.
+    Resolved relative to the RAW DATA root (``data_raw_path``) when the config
+    value is not absolute -- the spreadsheet is an OASIS material we do not
+    redistribute, so it lives beside the discs (``<DATA_RAW_PATH>/docs/``) where
+    download-extract-data.sh puts it, not in the repo.
+
+    A missing file is not an error: step1's cross-check reports it and skips.
     """
-    path = config.get("reference_xlsx", "./docs/oasis_cross-sectional.xlsx")
+    path = config.get("reference_xlsx", "docs/oasis_cross-sectional.xlsx")
     if not os.path.isabs(path):
-        path = os.path.join(REPO_ROOT, path)
+        path = os.path.join(config["data_raw_path"], path)
     return os.path.normpath(path)
 
 

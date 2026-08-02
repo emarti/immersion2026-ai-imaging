@@ -17,3 +17,7 @@ pandas           # optional convenience for the network step (manifest is YAML, 
 torch
 torchvision
 matplotlib       # step5 plots the step4 training logs (outputs/training_comparison.png)
+
+# --- jupyter/ notebooks (optional; not needed to run steps 1-6) ---
+ipykernel        # lets VS Code / Jupyter run a notebook against this environment
+scikit-learn     # jupyter/nWBV.ipynb: LogisticRegression + roc_auc_score

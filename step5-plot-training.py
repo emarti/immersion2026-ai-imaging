@@ -26,8 +26,8 @@ from common import load_config, load_yaml, manifest_yaml
 DESIGNS = [
     ("training_log_4a.csv", "4a: 8-16-32, dropout 0.6/0.2 (baseline)"),
     ("training_log_4b.csv", "4b: 8-16-32, no dropout"),
-    ("training_log_4c.csv", "4c: wider 16-32-64, dropout 0.6/0.2"),
-    ("training_log_4d.csv", "4d: shallower 8-16 (2 blocks), dropout 0.6/0.2"),
+    ("training_log_4c.csv", "4c: wider 32-64-128, 5x5 first, dropout 0.6/0.2"),
+    ("training_log_4d.csv", "4d: shallower 8-16 (2 blocks), dropout 0.4/0.2"),
 ]
 
 

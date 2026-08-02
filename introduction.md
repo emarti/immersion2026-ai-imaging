@@ -53,6 +53,58 @@ atrophy should be easier than very-mild. step5 therefore reports validation accu
 **broken down by CDR grade** so you can see this (with a caution: only a handful of
 validation subjects fall in each grade, so those per-grade numbers are noisy).
 
+### What our label actually is — and isn't
+
+Look again at what that label is made of, because the distinction below is the single easiest
+thing to get wrong when reading a paper in this field — including your own.
+
+**CDR is a rating of observed impairment.** A clinician arrives at it by structured interview,
+talking both with the person and with someone who knows them well, and scoring memory,
+orientation, judgment, community affairs, home life, and personal care. It describes how
+someone is *doing*.
+
+**Alzheimer's disease is a pathology** — amyloid plaques and tau tangles in brain tissue. For
+most of the history of the field it could only be confirmed at autopsy; today it can be
+inferred from biomarkers (amyloid PET, spinal fluid, and newer blood tests). **OASIS-1
+contains none of those.**
+
+These are not the same variable, and they come apart in *both* directions:
+
+- **Impairment without Alzheimer's.** A CDR of 0.5 or 1 can arise from vascular disease, Lewy
+  body dementia, depression, thyroid disease, medication side effects, or poor sleep. Our label
+  calls all of them CDR-positive, because that is what CDR measures.
+- **Alzheimer's without impairment.** In *preclinical* Alzheimer's the pathology is already
+  accumulating while cognition still tests normal. That person is CDR 0 — and we label them
+  CDR-negative, alongside people with no pathology at all.
+
+So a model trained here is, at its very best, learning to predict **a clinician's rating**. It
+is not learning to detect a disease, because we never showed it one.
+
+**This is normal, and it is the interesting part.** Most machine-learning examples you meet
+have labels that are correct by definition: a photo of a cat is labelled "cat", and there is
+nothing further to check. Biomedical ground truth is rarely like that. The thing you care about
+is invasive to measure, or expensive, or only available post-mortem, or simply wasn't recorded
+in the study you have. So you train on a **proxy** — a different, available variable that you
+hope tracks the one you want. Recognizing that substitution and saying so out loud is not a
+caveat you bolt on at the end; it is part of doing the work competently.
+
+Three consequences you can actually feel in this project:
+
+1. **It puts a ceiling on accuracy.** A model cannot be more consistent than the labels it was
+   trained on. Where two clinicians would disagree — is this person CDR 0 or CDR 0.5? — there
+   is no fact for the network to recover. This is one reason ≈0.78 is a realistic target and
+   0.99 would be a sign that something is wrong rather than something is working (§11).
+2. **The model inherits whatever the proxy encodes**, including things you did not intend. If
+   the CDR-positive people in our sample are also the older people, "predict CDR" and "predict
+   age" become partly the same task — which is exactly the confound we run into in §10.
+3. **It constrains what you may claim.** "Predicts CDR status from a hippocampus patch" is
+   supportable. "Detects Alzheimer's disease" is not, and the gap between those two sentences
+   is where a great deal of over-claiming in medical AI lives.
+
+> **Key idea.** We are not predicting Alzheimer's disease. We are predicting a clinician's
+> rating of impairment, which is related to it but not the same thing. Know what your label
+> really is, and describe your results in those terms — not in the terms you wish you had.
+
 The scans come from **OASIS-1**, a public dataset from Washington University: hundreds
 of people, each with an MRI and demographic/clinical information.
 
@@ -316,6 +368,10 @@ a coin flip," as it should be.
 > **specificity** because they reveal *which way* a model leans (does it miss impaired
 > people, or cry wolf on CDR-negative ones?).
 
+One caveat sits underneath all four numbers: they measure **agreement with the label**, and the
+label is a clinician's rating, not a ground truth (§1). A "false positive" may be a case where
+the model saw something real and the rating didn't, and we have no way here to tell those apart.
+
 All of these judge the model at a single **0.5 threshold**; a threshold-free alternative,
 **AUC** (area under the ROC curve), summarizes performance across *all* thresholds — a natural
 extension of the plots (see §14).
@@ -449,7 +505,7 @@ post-GAP bottleneck) is the stronger lever.
 You can watch this in the sweep: designs **4a and 4b** are the same 8-16-32 net and differ
 *only* in dropout (4a uses 0.6 / 0.2, 4b none), so the gap between them is the effect of
 dropout by itself — expect 4b to overfit (training accuracy climbs high, validation lags).
-The running results in `lab-notes.md` also show the *other* failure mode: an 8-16-32 net
+The running results in `internal/lab-notes.md` also show the *other* failure mode: an 8-16-32 net
 pushed to **high** dropout (0.8 / 0.4) saw its *specificity* collapse to 0.445 — it started
 crying wolf, calling almost everyone CDR-positive — and a tiny net with high dropout **plus**
 augmentation over-regularized the other way into "always CDR-negative." Same lesson from
@@ -540,8 +596,8 @@ three different directions:
 |---|---|---|---|
 | 4a | 8→16→32 (3) | 0.6 / 0.2 | baseline (~8.2k params) |
 | 4b | 8→16→32 (3) | 0.0 / 0.0 | no dropout → overfitting demo |
-| 4c | 16→32→64 (3) | 0.6 / 0.2 | wider (~28k params) |
-| 4d | 8→16 (2) | 0.6 / 0.2 | shallower (~2.4k params) |
+| 4c | 32→64→128 (3), 5×5 first | 0.6 / 0.2 | wider (~102k params, 12× the baseline) |
+| 4d | 8→16 (2), 32-unit head | 0.4 / 0.2 | smaller (~1.9k params) |
 
 This is a *sample* of the design space, not an exhaustive grid — one step in a few
 directions from the baseline. The general lesson we expect, and that you can confirm: on
@@ -549,7 +605,7 @@ data this scarce, removing regularization (4b) overfits, going wider (4c) tends 
 help, and going shallower (4d) costs surprisingly little, while the lean baseline holds
 its own. No amount of
 architecture cleverness beats simply having more/cleaner data. (Running results live in
-`lab-notes.md`; to fill in the space *between* these sample points yourself, see §14.)
+`internal/lab-notes.md`; to fill in the space *between* these sample points yourself, see §14.)
 
 **Many slices for training, one fixed slice for validation/test.** Training benefits
 from variety, so it uses several nearby planes (and optionally random shifts).
@@ -569,7 +625,7 @@ conditioned training is.**
 `apply_random_shifts` and ships **off**, so you can run with it off, then on, and
 measure whether it actually helps. Augmentation touches **training only** — validation
 and test must remain a fixed, honest target. When we ran exactly that experiment (Run 1
-vs Run 2 in `lab-notes.md`), the verdict was sobering: because each training image
+vs Run 2 in `internal/lab-notes.md`), the verdict was sobering: because each training image
 becomes `n_shifts` copies (8×), every epoch takes **~8× longer**, yet it **mainly helped
 the leaner nets** and **did not appreciably raise** the headline balanced accuracy — and
 piled on top of very high dropout in the tiniest net it *over-*regularized and made a
@@ -594,6 +650,10 @@ Why does theirs do better than we should expect from ours? Three instructive rea
 2. **3-D, not 2-D.** They use the whole hippocampus volume; we use flat slices.
 3. **Gentler training.** Low learning rate, small batch, few epochs.
 
+And one reason that caps *both* projects: the CDR label itself is imperfect (§1). Where
+clinicians would disagree, no amount of preprocessing or network capacity recovers a fact that
+was never in the data — so some of the missing 0.22 is not ours to win.
+
 > **Key idea.** ≈ 0.78 balanced accuracy is a realistic target, and closing the gap
 > would come from **better data preparation and going 3-D**, *not* from a bigger network
 > or more epochs. This is a teaching pipeline: expect modest, noisy numbers, and treat
@@ -605,6 +665,9 @@ Why does theirs do better than we should expect from ours? Three instructive rea
 
 - **Data quality and quantity dominate model choice.** The fanciest network cannot beat
   the information ceiling of the data.
+- **Know what your label actually is.** Ours is a clinical rating standing in for a disease we
+  never observed (§1). That bounds both what the model can achieve and what you may claim it
+  does — and it is the first question to ask of any biomedical dataset, including your own.
 - **Dropout is the main dial.** Moderate dropout on a lean net has been our best
   recipe; too much (especially on a tiny net, or stacked on augmentation) backfires (§9).
 - **Augmentation is a modest lever here.** Turning on random shifts costs ~8× the
@@ -684,7 +747,7 @@ from) the original [ramprs/grad-cam](https://github.com/ramprs/grad-cam) and a
 The pipeline is meant to be poked at. Here are experiments you can run — most are a
 one-line change to `config.yaml` or to the `Net` class in a `step4?-train-network.py`
 file — roughly from easiest to most ambitious. Change **one thing at a time**, re-run,
-and compare in `lab-notes.md`.
+and compare in `internal/lab-notes.md`.
 
 *Extend the sweep — the four designs only sample a few points; fill in the curve yourself
 by editing the `Net` class in a `step4?-train-network.py` file:*
@@ -692,9 +755,10 @@ by editing the `Net` class in a `step4?-train-network.py` file:*
 - **Fill in the dropout dial.** The sweep shows dropout only at 0.6 / 0.2 (4a) and off
   (4b). Sweep the `nn.Dropout(...)` values from 0.0 up toward ~0.9 and watch training and
   validation pull apart when it's too low (overfit) and collapse when it's too high.
-- **Fill in the width axis.** Designs 4a (8-16-32) and 4c (16-32-64) sample two widths.
-  Try narrower (e.g. 4-8-16) or wider still (32-64-128) by changing the conv-layer channel
-  counts, and find where adding channels stops helping.
+- **Fill in the width axis.** Designs 4a (8-16-32) and 4c (32-64-128) sample two widths, and
+  deliberately far apart ones. Fill in the middle (e.g. 16-32-64) or go narrower still
+  (4-8-16) by changing the conv-layer channel counts, and find where adding channels stops
+  helping — or starts hurting.
 - **Fill in the depth axis.** Designs 4d (2 blocks) and 4a (3 blocks) sample two depths.
   Try 1 block, or 4+, by adding/removing a `conv`+`bn` block (and its pool in `forward`)
   — GAP means you never have to re-tune the classifier sizes.
@@ -747,9 +811,39 @@ regression on brain size, etc. is a competitive or even better than AI.
   without new data. (We already get a reflection *pair* for free from cropping left **and**
   right — see §10 — so explicit flips mostly help in combination with rotation and shift.) Keep
   validation/test **un-augmented** for a clean, deterministic evaluation.
-- **Change the objective.** Try **focal loss** or class weighting for imbalance, or
-  predict the **CDR grade** itself (ordinal / multi-class) or regress the **MMSE** score
-  instead of a single yes/no.
+- **Train for balanced accuracy, not plain accuracy.** We *report* balanced accuracy (§6) but
+  we don't *train* for it: `BCEWithLogitsLoss` counts every patch equally, so whichever class
+  contributes more patches pulls the gradient harder — plain accuracy's bias, baked into
+  training. Worth knowing first: **you cannot optimize balanced accuracy directly.** It is a
+  step function — nudge a logit and either nothing changes or a prediction flips — so its
+  gradient is zero almost everywhere and gradient descent has nothing to walk down. Every
+  classifier is really trained on a smooth *surrogate* and judged on the metric you care about.
+  Three ways to close the gap, easiest first:
+  1. **Weight the classes in the loss** (one line):
+     `nn.BCEWithLogitsLoss(pos_weight=torch.tensor([n_neg / n_pos]))`, where the counts come
+     from the training manifest. Each *class* then contributes equally to the loss, which is
+     the training-time analogue of balanced accuracy.
+  2. **Tune the decision threshold instead** — no change to training at all. The 0.5 cut is a
+     convention, not a law: sweep it on the *validation* set and keep whichever value maximizes
+     balanced accuracy. Pairs naturally with the ROC-AUC bullet below, which needs the same
+     continuous scores.
+  3. **Use a differentiable stand-in for the metric** — compute sensitivity and specificity
+     from the sigmoid probabilities directly (rather than hard 0/1 counts) and maximize their
+     average, or try **focal loss**, which down-weights easy examples. More fiddly, and easy to
+     make training unstable.
+
+  **The catch — and the experiment worth running.** As configured this changes almost nothing:
+  `cohort.balance: label` already hands us an equal-sized training split, so `pos_weight` ≈ 1.
+  The
+  payoff is that it lets you *stop balancing*. Switch `cohort.balance` to `none` and you keep
+  every eligible subject instead of discarding subjects to force a 50/50 split — more data,
+  which §7 and the lab notes both name as the real bottleneck — and use the weighted loss to
+  stop the model collapsing onto the majority class. **Does more-but-imbalanced data beat
+  less-but-balanced?** Note that validation stops being 50/50 too, so plain accuracy and
+  balanced accuracy part ways and §6's metrics stop being interchangeable — read sensitivity
+  and specificity, or you will fool yourself exactly as the "always CDR-negative" model does.
+- **Change the objective entirely.** Predict the **CDR grade** itself (ordinal / multi-class)
+  rather than pooling severities, or regress the **MMSE** score instead of a single yes/no.
 - **Report AUC, not just sens/spec.** Add **ROC-AUC** (area under the ROC curve; optionally
   PR-AUC) to step5's printout and plots — a single **threshold-free** summary of how well the
   model *ranks* CDR-positive above CDR-negative, complementing the fixed-0.5-threshold
@@ -767,7 +861,9 @@ regression on brain size, etc. is a competitive or even better than AI.
   heatmap of where the network looks; a great sanity check that it's reading the
   hippocampus and not a border artifact.
 - **Feed it more data.** Add more `discs`, widen the cohort, or switch `balance` to
-  `none` — remembering that *effective* sample size is the number of subjects (§7).
+  `none` — remembering that *effective* sample size is the number of subjects (§7). If you go
+  the `none` route, pair it with a class-weighted loss (see "Train for balanced accuracy" above)
+  so the extra data doesn't just teach the model to always answer with the majority class.
 
 ---
 
@@ -784,8 +880,11 @@ regression on brain size, etc. is a competitive or even better than AI.
    what does that tell you?
 5. Why do we crop the **hippocampus** specifically, instead of feeding the whole slice?
 6. Why must all patches from one person go into the **same** train/validate/test split?
+7. Our best design reaches about **0.78 balanced accuracy**. Can we report that as "detects
+   Alzheimer's disease with 78 % accuracy"? If not, what *can* we honestly say — and what would
+   the dataset need to contain for the stronger claim to be available?
 
-*(Answers are throughout the notes: §2, §7, §6, §7 & §9, §10, §10.)*
+*(Answers are throughout the notes: §2, §7, §6, §7 & §9, §10, §10, §1.)*
 
 ---
 
@@ -795,6 +894,15 @@ regression on brain size, etc. is a competitive or even better than AI.
 - **Slice / plane** — one flat 2-D cross-section of the 3-D brain.
 - **Patch** — the small cropped rectangle around one hippocampus that we feed the model.
 - **Label** — the correct answer (0 CDR-negative / 1 CDR-positive), derived from the CDR.
+- **Ground truth** — the thing you actually want to know. In biomedical imaging it is often
+  unavailable (invasive, expensive, post-mortem, or never recorded), which is the whole
+  difficulty (§1).
+- **Proxy label** — an available variable used *in place of* the ground truth. Ours is CDR,
+  standing in for a disease the dataset never measured.
+- **Label noise** — disagreement or error in the labels themselves. It caps how well any model
+  can score, no matter how good the model is.
+- **Inter-rater variability** — how much two qualified people disagree when rating the same
+  case. A major source of label noise wherever a human assigns the label.
 - **Parameter / weight** — an adjustable number inside the network; "learning" tunes these.
 - **Convolution / filter / channel** — a sliding pattern-detector; each filter's output
   grid is a channel.
@@ -861,6 +969,20 @@ is, alongside other background reading, grouped by topic.
   ["Open Access Series of Imaging Studies (OASIS): Cross-Sectional MRI Data in Young, Middle Aged, Nondemented, and Demented Older Adults"](https://pubmed.ncbi.nlm.nih.gov/17714011/)
   (Journal of Cognitive Neuroscience, 2007) — the paper describing the OASIS-1 dataset
   this project uses.
+
+**What our label is — and what it isn't (§1)**
+
+- Morris,
+  ["The Clinical Dementia Rating (CDR): Current Version and Scoring Rules"](https://doi.org/10.1212/WNL.43.11.2412-a)
+  (Neurology, 1993) — the CDR itself: what the six categories are and how a clinician
+  arrives at a global score. This is the variable we actually train on.
+- Sperling et al.,
+  ["Toward Defining the Preclinical Stages of Alzheimer's Disease"](https://doi.org/10.1016/j.jalz.2011.03.003)
+  (Alzheimer's & Dementia, 2011) — the NIA-AA recommendations describing the stage where
+  Alzheimer's pathology is present but cognition still tests normal. Those people are CDR 0,
+  which is precisely why a CDR label is not a disease label.
+- (See also Marcus et al. 2007 above, which describes how OASIS-1's clinical data was
+  collected.)
 
 **Interpretability**
 

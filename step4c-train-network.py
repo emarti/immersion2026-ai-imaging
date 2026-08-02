@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
-"""Step 4d: DEPTH sample -- shallower (only two conv blocks).
+"""Step 4c: WIDTH sample -- wider (4x the channels).
 
-Design 4d -- the baseline 4a with one fewer conv block: 1 -> 8 -> 16 (two blocks, a tiny
-~2.4k-param net), same dropout (0.6 / 0.2). It samples the "less depth" direction: how
-little the net can be before it underfits. Each block is Conv(3x3, pad 1) -> BatchNorm ->
-ReLU -> MaxPool(2), then global average pooling and a small 2-layer classifier. Binary
-output (CDR-positive=1 vs CDR-negative=0) trained with BCEWithLogitsLoss + AdamW.
+Design 4c -- the baseline 4a widened to three conv blocks 1 -> 32 -> 64 -> 128 (4x the
+channels, ~102k params vs the baseline's ~8k), same dropout (0.6 / 0.2). Its first filter
+is also 5x5 rather than 3x3 (pad 2), giving block 1 a larger receptive field on the raw
+patch. It samples the "more capacity" direction: does a bigger net help on this small
+dataset, or just overfit? The gap over 4a is deliberately large -- an earlier 2x version
+(16-32-64, ~28k) landed so close to the baseline that the comparison taught nothing.
+Blocks 2-3 are Conv(3x3, pad 1) -> BatchNorm -> ReLU -> MaxPool(2), then global average
+pooling and a small 2-layer classifier. Binary output (CDR-positive=1 vs CDR-negative=0)
+trained with BCEWithLogitsLoss + AdamW.
 
 Each epoch trains on the training split and evaluates on the validation split;
 per-epoch train/val loss and accuracy are written to
-``outputs/training_log_4d.csv``, and the final weights to ``outputs/model_4d.pt``
+``outputs/training_log_4c.csv``, and the final weights to ``outputs/model_4c.pt``
 (step6 reads them for Grad-CAM). step5 overlays the CSVs from all designs (4a-4d).
 
 This file is self-contained (the step4 designs differ only in ``Net``).
@@ -33,8 +37,8 @@ from torchvision import transforms
 
 from common import load_config, load_yaml, manifest_yaml
 
-CSV_NAME = "training_log_4d.csv"
-MODEL_NAME = "model_4d.pt"
+CSV_NAME = "training_log_4c.csv"
+MODEL_NAME = "model_4c.pt"
 
 
 class OASISSlices(Dataset):
@@ -58,27 +62,33 @@ class OASISSlices(Dataset):
 
 
 class Net(nn.Module):
-    """Design 4d: 2 conv blocks 1 -> 8 -> 16 (shallower), moderate dropout (0.6 / 0.2)."""
+    """Design 4c: 3 conv blocks 1 -> 32 -> 64 -> 128 (wider, 5x5 first), moderate dropout (0.6 / 0.2)."""
 
     def __init__(self):
         super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 8, 3, 1, padding=1)
-        self.bn1 = nn.BatchNorm2d(8)
-        self.conv2 = nn.Conv2d(8, 16, 3, 1, padding=1)
-        self.bn2 = nn.BatchNorm2d(16)
+        # 5x5 first filter (pad 2 keeps the output the same size as the input): a wider
+        # net can afford a larger receptive field on the raw patch, so block 1 sees more
+        # context per step than the baseline's 3x3.
+        self.conv1 = nn.Conv2d(1, 32, 5, 1, padding=2)
+        self.bn1 = nn.BatchNorm2d(32)
+        self.conv2 = nn.Conv2d(32, 64, 3, 1, padding=1)
+        self.bn2 = nn.BatchNorm2d(64)
+        self.conv3 = nn.Conv2d(64, 128, 3, 1, padding=1)
+        self.bn3 = nn.BatchNorm2d(128)
         self.gap = nn.AdaptiveAvgPool2d((1, 1))
         self.dropout1 = nn.Dropout(0.6)
-        self.fc1 = nn.Linear(16, 64)
+        self.fc1 = nn.Linear(128, 64)
         self.dropout2 = nn.Dropout(0.2)
         self.fc2 = nn.Linear(64, 1)
 
     def forward(self, x):
         # Input is N x 1 x 84 x 68 (a left/right hippocampus patch from step3).
         # AdaptiveAvgPool makes the exact spatial size irrelevant.
-        x = F.max_pool2d(F.relu(self.bn1(self.conv1(x))), 2)      # -> 8 channels
-        x = F.max_pool2d(F.relu(self.bn2(self.conv2(x))), 2)      # -> 16 channels
-        x = self.gap(x)                                           # -> 16 x 1 x 1
-        x = torch.flatten(x, 1)                                   # -> 16
+        x = F.max_pool2d(F.relu(self.bn1(self.conv1(x))), 2)      # -> 32 channels (5x5 filter)
+        x = F.max_pool2d(F.relu(self.bn2(self.conv2(x))), 2)      # -> 64 channels
+        x = F.max_pool2d(F.relu(self.bn3(self.conv3(x))), 2)      # -> 128 channels
+        x = self.gap(x)                                           # -> 128 x 1 x 1
+        x = torch.flatten(x, 1)                                   # -> 128
         x = self.dropout1(x)
         x = F.relu(self.fc1(x))
         x = self.dropout2(x)
@@ -147,7 +157,7 @@ def evaluate(model, device, loader):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='OASIS CNN design 4d (shallower 8-16, dropout 0.6/0.2)')
+    parser = argparse.ArgumentParser(description='OASIS CNN design 4c (wider 32-64-128, 5x5 first, dropout 0.6/0.2)')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                         help='input batch size (default: 32)')
     parser.add_argument('--epochs', type=int, default=None, metavar='N',

@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-"""Step 4c: WIDTH sample -- wider (double the channels).
+"""Step 4d: DEPTH sample -- shallower (only two conv blocks).
 
-Design 4c -- the baseline 4a widened to three conv blocks 1 -> 16 -> 32 -> 64 (double
-the channels, ~28k params), same dropout (0.6 / 0.2). It samples the "more capacity"
-direction: does a bigger net help on this small dataset, or just overfit? Each block is
-Conv(3x3, pad 1) -> BatchNorm -> ReLU -> MaxPool(2), then global average pooling and a
-small 2-layer classifier. Binary output (CDR-positive=1 vs CDR-negative=0) trained with
-BCEWithLogitsLoss + AdamW.
+Design 4d -- the baseline 4a with one fewer conv block: 1 -> 8 -> 16 (two blocks, a tiny
+~1.9k-param net). It is trimmed further than a pure depth cut: the classifier head is
+halved (32 hidden units instead of 64) and the dropout eased to 0.4 / 0.2, since a net
+this small needs far less regularizing than the baseline does. It samples the "too little
+capacity" direction: how small the net can get before it underfits. Each block is
+Conv(3x3, pad 1) -> BatchNorm ->
+ReLU -> MaxPool(2), then global average pooling and a small 2-layer classifier. Binary
+output (CDR-positive=1 vs CDR-negative=0) trained with BCEWithLogitsLoss + AdamW.
 
 Each epoch trains on the training split and evaluates on the validation split;
 per-epoch train/val loss and accuracy are written to
-``outputs/training_log_4c.csv``, and the final weights to ``outputs/model_4c.pt``
+``outputs/training_log_4d.csv``, and the final weights to ``outputs/model_4d.pt``
 (step6 reads them for Grad-CAM). step5 overlays the CSVs from all designs (4a-4d).
 
 This file is self-contained (the step4 designs differ only in ``Net``).
@@ -34,8 +36,8 @@ from torchvision import transforms
 
 from common import load_config, load_yaml, manifest_yaml
 
-CSV_NAME = "training_log_4c.csv"
-MODEL_NAME = "model_4c.pt"
+CSV_NAME = "training_log_4d.csv"
+MODEL_NAME = "model_4d.pt"
 
 
 class OASISSlices(Dataset):
@@ -59,30 +61,27 @@ class OASISSlices(Dataset):
 
 
 class Net(nn.Module):
-    """Design 4c: 3 conv blocks 1 -> 16 -> 32 -> 64 (wider), moderate dropout (0.6 / 0.2)."""
+    """Design 4d: 2 conv blocks 1 -> 8 -> 16 (shallower), 32-unit head, light dropout (0.4 / 0.2)."""
 
     def __init__(self):
         super(Net, self).__init__()
-        self.conv1 = nn.Conv2d(1, 16, 3, 1, padding=1)
-        self.bn1 = nn.BatchNorm2d(16)
-        self.conv2 = nn.Conv2d(16, 32, 3, 1, padding=1)
-        self.bn2 = nn.BatchNorm2d(32)
-        self.conv3 = nn.Conv2d(32, 64, 3, 1, padding=1)
-        self.bn3 = nn.BatchNorm2d(64)
+        self.conv1 = nn.Conv2d(1, 8, 3, 1, padding=1)
+        self.bn1 = nn.BatchNorm2d(8)
+        self.conv2 = nn.Conv2d(8, 16, 3, 1, padding=1)
+        self.bn2 = nn.BatchNorm2d(16)
         self.gap = nn.AdaptiveAvgPool2d((1, 1))
-        self.dropout1 = nn.Dropout(0.6)
-        self.fc1 = nn.Linear(64, 64)
+        self.dropout1 = nn.Dropout(0.4)
+        self.fc1 = nn.Linear(16, 32)
         self.dropout2 = nn.Dropout(0.2)
-        self.fc2 = nn.Linear(64, 1)
+        self.fc2 = nn.Linear(32, 1)
 
     def forward(self, x):
         # Input is N x 1 x 84 x 68 (a left/right hippocampus patch from step3).
         # AdaptiveAvgPool makes the exact spatial size irrelevant.
-        x = F.max_pool2d(F.relu(self.bn1(self.conv1(x))), 2)      # -> 16 channels
-        x = F.max_pool2d(F.relu(self.bn2(self.conv2(x))), 2)      # -> 32 channels
-        x = F.max_pool2d(F.relu(self.bn3(self.conv3(x))), 2)      # -> 64 channels
-        x = self.gap(x)                                           # -> 64 x 1 x 1
-        x = torch.flatten(x, 1)                                   # -> 64
+        x = F.max_pool2d(F.relu(self.bn1(self.conv1(x))), 2)      # -> 8 channels
+        x = F.max_pool2d(F.relu(self.bn2(self.conv2(x))), 2)      # -> 16 channels
+        x = self.gap(x)                                           # -> 16 x 1 x 1
+        x = torch.flatten(x, 1)                                   # -> 16
         x = self.dropout1(x)
         x = F.relu(self.fc1(x))
         x = self.dropout2(x)
@@ -151,7 +150,7 @@ def evaluate(model, device, loader):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='OASIS CNN design 4c (wider 16-32-64, dropout 0.6/0.2)')
+    parser = argparse.ArgumentParser(description='OASIS CNN design 4d (shallower 8-16, dropout 0.4/0.2)')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                         help='input batch size (default: 32)')
     parser.add_argument('--epochs', type=int, default=None, metavar='N',
