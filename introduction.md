@@ -775,6 +775,42 @@ regression on brain size, etc. is a competitive or even better than AI.
 - **Trade age range against sample size.** A tighter `cohort.age_min/age_max` makes the
   CDR-negative and CDR-positive groups more comparable but gives you fewer subjects; loosening it
   does the opposite. Where's the sweet spot?
+- **Measure how much of the answer is age, not CDR status.** Narrowing the age band (§10) is a
+  blunt instrument: it removes the confound *and* shrinks the cohort at the same time, so a drop
+  in accuracy has two possible explanations and you cannot tell them apart. Better tools exist,
+  and none of them requires abandoning the data you have:
+  - **Score the model against age inside the same age bin.** Report balanced accuracy separately
+    within narrow strata — 60–65, 65–70, 70–75, … If the model is above chance *overall* but at
+    chance *within every bin*, then all of its skill came from telling old people from young
+    ones. No retraining needed; you already have per-subject predictions.
+  - **Correlate the model's own output with age.** Take the trained network's logit on each
+    validation subject and correlate it with that subject's age, *separately within each true
+    class*. If the logit climbs with age among the CDR-negative subjects — people for whom age
+    should be irrelevant to the answer — the network is reading age off the scan.
+  - **Test it on age-matched pairs.** Pair each CDR-positive subject with a CDR-negative one of
+    the same age (±1 year) and ask only how often the model ranks the pair correctly. That
+    number is age-free by construction, and unlike a narrowed cohort it keeps every subject.
+  - **Ask the network to predict age directly.** Train the same architecture to regress age from
+    the patch (swap `BCEWithLogitsLoss` for `MSELoss` and the final logit for a number). If it
+    predicts age well, then age *is* legible in a hippocampus patch — which tells you the CDR
+    classifier had the option of using it. This is a small field in its own right, under the
+    name **brain age**.
+- **Use age properly instead of fighting it.** Age is genuinely informative about dementia risk;
+  the problem is not that the model knows it, but that we cannot tell how much of the score it
+  is silently providing. Three ways to make it explicit:
+  - **Give age to the model on purpose.** Concatenate age to the GAP feature vector before the
+    classifier head (§4.6) — a one-line change to `forward`. Then train three models: age only,
+    image only, and age + image. The gap between "age + image" and "age only" is the honest
+    answer to *what did the imaging buy us?*, and it is the number a clinical reader would ask
+    for. (`jupyter/age_confounder.ipynb` already gives you the age-only leg.)
+  - **Ask whether the model adds anything beyond age.** Fit two logistic regressions on the
+    validation subjects: `CDR ~ age`, and `CDR ~ age + model_logit`. If the second is not
+    meaningfully better than the first, the network contributed nothing that age did not already
+    supply — regardless of how good its accuracy looked on its own.
+  - **Train the features to be age-blind.** Add a second head that tries to predict age from the
+    shared features, and train the backbone *against* it (a gradient-reversal or "adversarial
+    de-biasing" setup) so the features it keeps are the ones age cannot explain. The most
+    powerful option and much the most work — but it is how the problem is handled properly.
 - **Balance sex *and* CDR status.** Switch `cohort.balance` from `label` to `strict` to
   remove a possible sex confound — at the cost of roughly half the data. Does honest
   validation accuracy go up or down?
