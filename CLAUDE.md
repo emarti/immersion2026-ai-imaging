@@ -80,23 +80,31 @@ students never have to `cd` anywhere. Scripts run in numeric order:
 
 | | | |
 |---|---|---|
-| `step1-gather-metadata.py` | metadata + whole-dataset age histograms | `outputs/metadata.csv` |
-| `step2-assign-groups.py` | cohort selection + subject-level splits | `outputs/splits.yaml` |
-| `step3-generate-slices.py` | hippocampus patch PNGs + crop-box context images | `outputs/<split>/`, `manifest.yaml` |
-| `step4a`–`4d-train-network.py` | four CNN designs (baseline + 3 single-change variants) | `outputs/training_log_4?.csv`, `model_4?.pt` |
-| `step5-plot-training.py` | comparison plot + text summary | `outputs/training_comparison.png` |
-| `step6-gradcam.py` | Grad-CAM heatmaps | `outputs/gradcam*/` |
-| `step7-perturb.py` | perturbation saliency — **standalone** | `outputs/perturb/` |
+| `step1-gather-metadata.py` | metadata + whole-dataset age histograms | `outputs/metadata.csv`, `step1-dataset_age_histograms.png` |
+| `step2-assign-groups.py` | cohort selection + subject-level splits | `outputs/splits.yaml`, `step2-cohort_age_histograms.png` |
+| `step3-generate-slices.py` | hippocampus patch PNGs + crop-box context images | `outputs/<split>/`, `manifest.yaml`, `outputs/config.yaml` (a copy of the config used) |
+| `step4-train-network.py` | trains the CNN | `outputs/training_log_4.csv`, `model_4.pt` |
+| `step5-plot-training.py` | training-curve plot + text summary (`--reveal` adds TEST) | `outputs/step5-training_comparison.png`, `step5-training_summary.txt`, `step5-roc_curve.png` |
+| `step6-gradcam.py` | Grad-CAM heatmaps | `outputs/step6-gradcam_grid.png`, `gradcam*/` |
+| `step7-stack-predictors.py` | age/nWBV/CNN predictor ablation (`--reveal` adds TEST) | `outputs/step7-stacking_summary.txt`, `outputs/step7-predictor_correlations.png`, `outputs/step7-roc_curves.png` |
 
-`process.sh` runs steps 1–6. **Step 7 is intentionally excluded** from `process.sh`,
-`config.yaml`, and the reader-facing docs — it's an optional extra. Keep it that way unless
-told otherwise.
+`process.sh` runs all 7 steps (step7 with no `--reveal`, so TEST stays untouched by the
+default pipeline run). `step7` still has **no `config.yaml` section** of its own — CLI
+flags only — but is no longer excluded from `process.sh`; only the deliberate,
+one-time `--reveal` step (on step5 or step7) is left for the user to run by hand.
+Root-level report/figure outputs (histograms, comparison plots, summaries — not the
+per-sample dirs like `gradcam/`, `gradcam_context/`, `slice_context/`, or core pipeline
+data like `metadata.csv`/`splits.yaml`/`manifest.yaml`) are prefixed with the step that
+writes them, e.g. `step2-cohort_age_histograms.png`.
 
 `common.py` holds shared config loading and path helpers — use them (`metadata_csv`,
 `splits_yaml`, `manifest_yaml`, `split_dir`, `reference_xlsx`) rather than rebuilding paths.
 
-The step4 designs are **deliberately near-duplicate files** differing only in `Net`, so a
-student can diff any two and see one change. Do not refactor them into a shared module.
+step4 used to be four deliberately near-duplicate designs (4a–4d) differing only in `Net`,
+so a student could diff any two and see one change; that sweep was retired in favor of a
+single design. If a similar multi-variant teaching sweep is reintroduced later, keep the
+same discipline — near-duplicate files differing in exactly one thing, not a shared module
+with a `design` parameter.
 
 ## config.yaml is the single source of truth
 
@@ -106,11 +114,13 @@ constant to a step script, it probably belongs in the config — and it needs a 
 explaining it in the same plain-language register as its neighbours, plus an entry in
 `readme.md` §5.
 
-**Prose that restates a config value will drift from it.** The retired `plan.md` is the worked
-example: it claimed `age_min: 60` and "the last 50 epochs" long after the config had moved on.
-Prefer describing what a setting *does* over quoting what it currently *is*; where a number
-genuinely has to appear in prose, changing the config means checking `readme.md` §5 and
-`introduction.md` for the same figure.
+**Prose that restates a config value will drift from it.** An earlier version of `plan.md`
+is the worked example: it claimed `age_min: 60` and "the last 50 epochs" long after the
+config had moved on, and was rewritten for exactly that reason (see `plan.md`'s own header
+for what it tracks now, and its explicit note to describe *what changed and why* rather
+than quoting current numbers). Prefer describing what a setting *does* over quoting what it
+currently *is*; where a number genuinely has to appear in prose, changing the config means
+checking `readme.md` §5 and `introduction.md` for the same figure.
 
 ## Paths and data
 
@@ -130,6 +140,10 @@ genuinely has to appear in prose, changing the config means checking `readme.md`
 - `readme.md` — how to run it + the full `config.yaml` reference. Student-facing.
 - `introduction.md` — the theory and the *why*. Student-facing.
 - `internal/lab-notes.md` — the experiment log: runs, results, what was tried. Append, don't rewrite.
+- `plan.md` — a narrow, currently-pending-work tracker (specifically: readme.md/introduction.md
+  updates a code change requires but hasn't received yet). Not a general status or findings
+  file — those belong in `internal/lab-notes.md`, per the next line.
 - `CLAUDE.md` — this file.
 
-Results, findings, and TODOs go in `internal/lab-notes.md`. Don't start new tracker files.
+Results, findings, and TODOs go in `internal/lab-notes.md`. Don't start new tracker files
+beyond the ones above.

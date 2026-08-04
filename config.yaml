@@ -49,17 +49,25 @@ labels:
 # ---------------------------------------------------------------------------
 # Cohort selection (step2)
 # ---------------------------------------------------------------------------
+# Two SEPARATE age bands, not one. Why: a single age_min/age_max forces one dial to do
+# two conflicting jobs -- how MUCH data we get, and how age-confounded the honest numbers
+# are. Splitting it in two lets TRAIN be big and age-diverse (more signal to learn from,
+# confound and all) while VALIDATE/TEST stay narrow and age-matched (so the reported
+# balanced accuracy isn't secretly measuring "can you guess age"). See introduction.md
+# section 10 and internal/lab-notes.md for the age-confound background.
 cohort:
-  age_min: 60            # inclusive
-  age_max: 80            # inclusive
-  # Cohort balancing policy (exact counts depend on the age range):
-  #   strict -- equal per (sex x label) cell, capped by the smallest cell (fewest subjects)
-  #   label  -- equal cdr_negative/cdr_positive, sex left free (~2x strict)
-  #   none   -- all eligible subjects, no balancing (most subjects)
-  balance: label
+  age_train:             # broad band, TRAIN only -- inclusive
+    min: 50
+    max: 90
+  age_eval:               # narrow band shared by VALIDATE and TEST -- inclusive.
+    min: 70               # This is the band internal/lab-notes.md Run 11 already found
+    max: 79                # removes the age confound (age difference between groups ~1 yr).
   seed: 42               # reproducible sampling + splitting
-  max_subjects: null     # cap total cohort size for fast test runs (null = use all);
-                         # kept balanced per the policy above. Use >= 12 to fill all splits.
+  # Optional ADDITIONAL absolute cap, on top of the split fractions below (see `splits:`) --
+  # for fast test runs. Applied independently to each of the three draws (validate, then
+  # test, then train): halved for validate/test (this many per label), flat for train.
+  # null = no extra cap.
+  max_subjects: null
 
 # ---------------------------------------------------------------------------
 # Transverse (axial / horizontal) slice geometry (step3)
@@ -98,40 +106,69 @@ hippocampus:
   lr_left: [90, 148]       # L-R cols for the LEFT hippocampus  -> 58 px wide
   # ap: [76, 152]            # A-P rows  -> 76 px tall
   # lr_left: [90, 150]       # L-R cols for the LEFT hippocampus  -> 60 px wide
-  # Training-only random-shift augmentation (tutorial's CropLeftHC(random_shift)):
-  # when `apply_random_shifts` is true, each TRAIN patch is duplicated n_shifts times,
-  # each cropped at a random (dx,dy) in [-random_shift, random_shift] voxels. When
-  # false, training uses the unshifted box (one patch per plane/side). Validation/test
-  # never shift. random_shift=3 -> (3*3+1)^2 = 100 possible shifts; n_shifts=8 samples 8.
-  # (1 mm voxels here, so +/-3 = +/-3 mm.)
+  # Training-only augmentation -- val/test always get the plain, unshifted,
+  # unrotated box, for a clean deterministic evaluation. Random shifts
+  # (tutorial's CropLeftHC(random_shift)) duplicate each TRAIN patch n_shifts
+  # times at random (dx,dy) offsets within +/-random_shift voxels. Independently,
+  # apply_random_reflections_rotations ALSO flips each shifted patch left-right
+  # and top-to-bottom (each a fixed 25% chance, hardcoded in
+  # step3-generate-slices.py) and rotates it by a random multiple of 90 degrees,
+  # losslessly (crop-rotate-crop, never resized/interpolated). Orientation isn't
+  # diagnostic on a small, centred ROI patch like this one -- atrophy looks the
+  # same rotated or mirrored -- so these are the same idea, just synthetic, as the
+  # free left/right reflection pair we already get from cropping both hippocampi
+  # (introduction.md §10). See internal/lab-notes.md for what running with these
+  # on actually showed.
   apply_random_shifts: true
-  random_shift: 3
-  n_shifts: 10
+  random_shift: 4
+  n_shifts: 32
+  apply_random_reflections_rotations: true
 
 # ---------------------------------------------------------------------------
-# Train / validate / test splits (step2)
+# Validate / test split (step2) -- train has no fraction, see below
 # ---------------------------------------------------------------------------
-# Splits are made at the SUBJECT level (all of a subject's slices stay in one
-# split) and stratified by (sex, label) so each split stays balanced.
+# VALIDATE is drawn first, then TEST, then TRAIN gets everything left over. Each fraction
+# below is a CEILING measured against the size of the BROAD age_train-eligible pool (not
+# the narrow age_eval pool it's actually drawn from) -- but the subjects themselves only
+# ever come from age_eval, balanced (equal cdr_negative/cdr_positive, sex free), hardcoded.
+# Since age_eval-eligible is much smaller than age_train-eligible, the fraction you write
+# here (e.g. 0.15) ends up being a MUCH bigger share of age_eval's own pool once drawn --
+# step2 prints both percentages so you can see the real numbers. It's a ceiling, not a
+# guarantee: if fewer eligible/balanced subjects exist than the target implies, you get
+# fewer -- never padded or duplicated.
+#
+# TRAIN takes every age_train-eligible subject NOT claimed by validate/test -- no fraction,
+# no cap here (see cohort.max_subjects for an optional absolute cap on all three, for fast
+# test runs). Its resulting size is therefore whatever's left, not a fixed number -- it can
+# land above or below any particular target you might have in mind.
 splits:
-  train:    0.70
-  validate: 0.15
-  test:     0.15
+  validate: 0.2
+  test:     0.1
 
 # ---------------------------------------------------------------------------
 # Training (step4) + reporting (step5)
 # ---------------------------------------------------------------------------
-epochs: 100              # training passes per design in step4 (a CLI --epochs overrides)
-avg_last_epochs: 20      # step5 averages validation metrics over the last N epochs
+epochs: 10              # training passes in step4 (a CLI --epochs overrides)
+avg_last_epochs: 4      # step5 averages validation metrics over the last N epochs
+
+training:
+  # Weight BCEWithLogitsLoss's two classes inversely to their counts in the TRAIN split
+  # (pos_weight = n_cdr_negative_patches / n_cdr_positive_patches), so each CLASS
+  # contributes equally to the gradient no matter how many patches it has -- the
+  # training-time analogue of balanced accuracy (see introduction.md section 14, "Train
+  # for balanced accuracy, not plain accuracy"). While cohort.balance used to keep train
+  # itself close to 50/50, this was near a no-op (pos_weight ~= 1); now that train draws
+  # unbalanced from the broad age_train band above, this is where it starts to matter.
+  # Set to false to turn it off and compare directly against the same run with it on.
+  balanced_loss: true
 
 # ---------------------------------------------------------------------------
 # Grad-CAM interpretability (step6)
 # ---------------------------------------------------------------------------
 # step6 overlays a heatmap of WHERE a trained model looks to push a patch toward
-# CDR-positive (label 1). `model` names a checkpoint written by step4; the network
-# architecture is inferred from the file name (model_4a.pt -> design 4a).
+# CDR-positive (label 1). `model` names the checkpoint written by step4.
 gradcam:
-  model: model_4a.pt      # which step4 checkpoint to explain (defaults to the 4a baseline)
+  model: model_4.pt       # which checkpoint to explain (defaults to step4's output)
   split: validate         # patches to sample from: train | validate | test
   n_samples: 12           # how many patches to visualize
   seed: 0                 # sampling seed (reproducible)

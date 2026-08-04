@@ -15,10 +15,23 @@ tutorial's CropLeftHC augmentation); validation/test subjects yield just ``2`` (
 evaluation. Patches from one subject always live in the same split, so there is no
 train/test leakage.
 
+When ``hippocampus.apply_random_reflections_rotations`` is on, each of those TRAIN
+patches is ALSO independently reflected left-right and/or top-down (each a fixed 25%
+chance, hardcoded as ``REFLECT_LR_PROB``/``REFLECT_UD_PROB`` below) and rotated by a
+random multiple of 90 degrees -- a second, independent augmentation layered on top of
+the random shifts, never resizing or interpolating (see ``rotate_reflect_patch``).
+Validation/test are never reflected or rotated, same as they're never shifted. Every
+train row in the manifest records what was drawn (``rotation_deg``, ``reflect_lr``,
+``reflect_ud``), 0/False/False on validation/test rows.
+
 For a small sample of subjects per split (``slices.context_samples``), step3 also writes
 **context** images to ``outputs/slice_context/<split>/``: the full axial slice with a
 rectangle around every crop window actually taken from it (train shows all random-shift
 boxes per plane; validation/test show the single box), so the ROI size is visible in situ.
+
+Also copies the config actually used to ``outputs/config.yaml``, so a run's PNGs and
+manifest always carry a record of the settings that produced them, independent of
+whatever config.yaml (or ``--config`` override) is currently on disk.
 
 Usage:
     python step3-generate-slices.py [--config config.yaml]
@@ -28,11 +41,12 @@ from __future__ import annotations
 import argparse
 import os
 import random
+import shutil
 
 import numpy as np
 import yaml
 
-from common import SPLITS, load_config, load_yaml, manifest_yaml, split_dir, splits_yaml
+from common import REPO_ROOT, SPLITS, load_config, load_yaml, manifest_yaml, split_dir, splits_yaml
 
 try:
     import nibabel as nib
@@ -79,6 +93,47 @@ def extract_slice(vol: np.ndarray, axis: int, index: int) -> np.ndarray:
     """
     plane = np.take(vol, index, axis=axis)
     return np.flipud(plane.T)
+
+
+REFLECT_LR_PROB = 0.25   # independent chance of a training patch being flipped left-right
+REFLECT_UD_PROB = 0.25   # independent chance of a training patch being flipped top-to-bottom
+
+
+def rotate_reflect_patch(sl: np.ndarray, r0: int, c0: int, bh: int, bw: int,
+                         rng: random.Random):
+    """Return a (bh, bw) patch centred on the same window as ``sl[r0:r0+bh, c0:c0+bw]``,
+    but rotated by a random multiple of 90 degrees and, independently, possibly flipped
+    left-right (probability ``REFLECT_LR_PROB``) and/or top-down (``REFLECT_UD_PROB``).
+    Every output is exactly (bh, bw) regardless of which rotation is drawn, and no pixel
+    is ever resized or interpolated: a square big enough to contain the (bh, bw) box
+    after ANY 90-degree rotation is cropped first, rotated losslessly with ``np.rot90``,
+    then centre-cropped back down to (bh, bw).
+
+    Returns ``(patch, rotation_deg, did_lr, did_ud)`` -- the draws are reported back so
+    the caller can record them in the manifest.
+    """
+    H, W = sl.shape
+    S = max(bh, bw)
+    center_r, center_c = r0 + bh // 2, c0 + bw // 2
+    r0_sq = min(max(center_r - S // 2, 0), H - S)
+    c0_sq = min(max(center_c - S // 2, 0), W - S)
+    square = sl[r0_sq:r0_sq + S, c0_sq:c0_sq + S]
+
+    k = rng.randrange(4)                        # 0/1/2/3 -> 0/90/180/270 degrees
+    rotated = np.rot90(square, k)
+    rh0, rw0 = (S - bh) // 2, (S - bw) // 2
+    patch = rotated[rh0:rh0 + bh, rw0:rw0 + bw]
+
+    did_lr = rng.random() < REFLECT_LR_PROB
+    if did_lr:
+        patch = np.fliplr(patch)
+    did_ud = rng.random() < REFLECT_UD_PROB
+    if did_ud:
+        patch = np.flipud(patch)
+
+    # rot90/fliplr/flipud all return views -- make the result a contiguous array
+    # before it's handed to PIL for saving.
+    return np.ascontiguousarray(patch), k * 90, did_lr, did_ud
 
 
 def rel_to(path: str, root: str) -> str:
@@ -166,6 +221,12 @@ def main() -> None:
     config = load_config(args.config)
     splits = load_yaml(splits_yaml(config))
 
+    # Copy the config actually used into outputs/, so a run's PNGs/manifest always carry
+    # a record of the settings that produced them, even if config.yaml is edited later.
+    config_src = args.config if os.path.isabs(args.config) else os.path.join(REPO_ROOT, args.config)
+    os.makedirs(config["outputs_path"], exist_ok=True)
+    shutil.copy2(config_src, os.path.join(config["outputs_path"], "config.yaml"))
+
     scfg = config["slices"]
     axis = scfg["slice_axis"]
     middle = scfg["middle_index"]
@@ -183,12 +244,19 @@ def main() -> None:
 
     # Training-only random-shift augmentation: each train patch is cropped at
     # n_shifts distinct random (dx, dy) offsets; val/test use the unshifted box.
-    rng = random.Random(config["cohort"]["seed"])   # reproducible shifts
+    rng = random.Random(config["cohort"]["seed"])   # reproducible shifts (and, below,
+                                                     # reproducible reflections/rotations)
     apply_random_shifts = hcfg.get("apply_random_shifts", False)
     random_shift = hcfg.get("random_shift", 0)
     n_shifts = hcfg.get("n_shifts", 1)
     all_shifts = [(dx, dy) for dx in range(-random_shift, random_shift + 1)
                            for dy in range(-random_shift, random_shift + 1)]
+
+    # Training-only reflection/rotation augmentation -- independent of the shift
+    # augmentation above; see config.yaml's comment for the anatomical-plausibility
+    # caveat on the top-down flip and the 90-degree rotations. Probabilities are
+    # hardcoded (REFLECT_LR_PROB/REFLECT_UD_PROB above), not configurable.
+    apply_random_reflections_rotations = hcfg.get("apply_random_reflections_rotations", False)
 
     # Context images: sample a few subjects per split whose full axial slices we redraw with
     # rectangles around the actual crop windows (train: every random-shift box per plane;
@@ -264,8 +332,15 @@ def main() -> None:
                             continue
                         seen_positions.add((r0, c0s))
                         if is_ctx:
+                            # Position only -- faithful to the actual crop window even
+                            # when the saved patch below is rotated/reflected for train.
                             windows[side].append((r0, c0s))
-                        patch = sl[r0:r0 + bh, c0s:c0s + bw]   # hippocampus ROI patch
+                        if split == "train" and apply_random_reflections_rotations:
+                            patch, rotation_deg, reflect_lr, reflect_ud = rotate_reflect_patch(
+                                sl, r0, c0s, bh, bw, rng)
+                        else:
+                            patch = sl[r0:r0 + bh, c0s:c0s + bw]   # hippocampus ROI patch
+                            rotation_deg, reflect_lr, reflect_ud = 0, False, False
                         slice_shape = patch.shape
                         # Flat per-split folder; label + side + copy index in the name.
                         fname = f"{subject}_lbl{label}_ax{idx:03d}_{side}_a{a:02d}.png"
@@ -288,6 +363,9 @@ def main() -> None:
                                 "side": side,
                                 "shift_x": dx,
                                 "shift_y": dy,
+                                "rotation_deg": rotation_deg,
+                                "reflect_lr": reflect_lr,
+                                "reflect_ud": reflect_ud,
                             }
                         )
 

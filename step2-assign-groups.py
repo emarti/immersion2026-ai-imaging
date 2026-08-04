@@ -2,19 +2,26 @@
 """Step 2: choose the study cohort and assign subjects to train/val/test.
 
 Reads ``metadata.csv`` from step1 and produces ``config/splits.yaml``. It also saves an
-age-distribution figure ``outputs/cohort_age_histograms.png`` -- CDR-negative vs
+age-distribution figure ``outputs/step2-cohort_age_histograms.png`` -- CDR-negative vs
 CDR-positive counts by age, in three panels (both sexes pooled, sexes separated, and by raw
-CDR grade) -- which makes the age (and sex) confound visible and helps pick ``age_min`` /
-``age_max``.
+CDR grade) -- which makes the age (and sex) confound visible and shows both age bands below.
 
-Cohort: subjects in the configured age range with a valid CDR and an image on
-disk. ``cohort.balance`` then selects how to balance them:
-  strict -- equal per (sex x label) cell, capped by the smallest cell.
-  label  -- equal cdr_negative/cdr_positive, sex left free (~2x strict).
-  none   -- all eligible subjects, no balancing.
+TRAIN and VALIDATE/TEST are built from two SEPARATE age bands, not one shared band, and
+each of the three splits is capped at up to its own ``splits:`` fraction (config.yaml) of
+its own eligible pool -- a ceiling, not a guarantee; you can get fewer:
 
-Splits are made at the SUBJECT level (no subject appears in two splits) and are
-stratified by the balancing strata, so every split keeps the same balance.
+  1. VALIDATE/TEST come from the narrow ``cohort.age_eval`` band. Up to
+     ``(splits.validate + splits.test)`` of the age_eval-eligible subjects are drawn as a
+     BALANCED sample (equal cdr_negative/cdr_positive, sex left free), then that pool is
+     split subject-level into validate/test per the relative ``splits:`` ratio.
+  2. TRAIN comes from the broader ``cohort.age_train`` band: up to ``splits.train`` of the
+     age_train-eligible subjects not already claimed by validate/test, as a plain RANDOM
+     sample -- UNBALANCED on purpose, deliberately left age-diverse and class-imbalanced,
+     so it can be a much bigger pool. (See ``training.balanced_loss`` in config.yaml, which
+     is what compensates for that imbalance during training.)
+
+This way validate/test stay narrow, age-matched, and balanced (honest, if noisier,
+numbers), while train stays large (more signal to learn from).
 
 Usage:
     python step2-assign-groups.py [--config config.yaml]
@@ -36,8 +43,8 @@ def read_metadata(path: str) -> list[dict]:
         return list(csv.DictReader(f))
 
 
-def eligible_rows(rows: list[dict], cohort: dict) -> list[dict]:
-    """Keep subjects in the configured age range with a valid label and an image."""
+def eligible_rows(rows: list[dict], age_min: int, age_max: int) -> list[dict]:
+    """Keep subjects in [age_min, age_max] with a valid label and an image."""
     keep = []
     for r in rows:
         if r["label"] not in ("0", "1"):
@@ -47,7 +54,7 @@ def eligible_rows(rows: list[dict], cohort: dict) -> list[dict]:
         if r["age"] == "":
             continue
         age = int(r["age"])
-        if not (cohort["age_min"] <= age <= cohort["age_max"]):
+        if not (age_min <= age <= age_max):
             continue
         if r["sex"] not in ("M", "F"):
             continue
@@ -63,7 +70,7 @@ EXPECTED_CELLS = [("M", "0"), ("M", "1"), ("F", "0"), ("F", "1")]
 
 
 def _cell_sizes(rows: list[dict]) -> dict:
-    """(sex, label) cell counts, for the printout (reported in every mode)."""
+    """(sex, label) cell counts, for the printout."""
     cells: dict[tuple[str, str], list[dict]] = {}
     for r in rows:
         cells.setdefault(cell_key(r), []).append(r)
@@ -77,93 +84,50 @@ def _take(members: list[dict], rng: random.Random, n=None) -> list[dict]:
     return members if n is None else members[:n]
 
 
-def select_cohort(rows: list[dict], balance: str, rng: random.Random,
-                  max_subjects=None):
-    """Group eligible subjects into strata for the stratified subject-level split.
+def select_balanced_eval_cohort(rows: list[dict], target_per_label: int, rng: random.Random,
+                                max_subjects=None):
+    """One split's (validate's or test's) draw from whatever's currently left of the
+    age_eval-eligible pool: equal cdr_negative/cdr_positive counts (sex left free),
+    hardcoded -- capped at ``target_per_label`` per label and, if set, ``max_subjects``.
+    May end up SMALLER than the cap if fewer eligible subjects remain for a label than
+    the cap allows -- it's a ceiling, not a guarantee.
 
-    Returns ``(groups, sizes, info)`` where ``groups`` maps a stratum key -> subject
-    list (what ``assign_splits`` divides independently), ``sizes`` is the (sex,label)
-    cell counts for reporting, and ``info`` is a one-line description. Modes:
-
-      strict -- equal per (sex x label) cell, capped by the smallest cell.
-      label  -- equal cdr_negative/cdr_positive, sex left free.
-      none   -- all eligible subjects, no balancing.
-
-    ``max_subjects`` optionally caps the total for fast test runs.
+    Returns ``(groups, sizes, info)`` where ``groups`` maps label -> subject list (the
+    chosen members for THIS split), ``sizes`` is the (sex,label) cell counts of ``rows``
+    (what was available before this draw) for reporting, and ``info`` is a one-line
+    description.
     """
     sizes = _cell_sizes(rows)
-
-    if balance == "strict":
-        cells = {k: [r for r in rows if cell_key(r) == k] for k in EXPECTED_CELLS}
-        n = min(sizes.values()) if sizes else 0
-        if max_subjects is not None:
-            n = min(n, max_subjects // 4)
-        groups = {k: _take(cells[k], rng, n) for k in EXPECTED_CELLS}
-        return groups, sizes, f"strict (sex x label): {n} per cell, {n * 4} total"
-
-    if balance == "label":
-        by_label = {lbl: [r for r in rows if r["label"] == lbl] for lbl in ("0", "1")}
-        n = min(len(by_label["0"]), len(by_label["1"]))
-        if max_subjects is not None:
-            n = min(n, max_subjects // 2)
-        groups = {lbl: _take(by_label[lbl], rng, n) for lbl in ("0", "1")}
-        return groups, sizes, f"label-balanced (sex free): {n} per label, {n * 2} total"
-
-    if balance == "none":
-        kept = _take(rows, rng, max_subjects)
-        groups: dict[tuple[str, str], list[dict]] = {}
-        for r in kept:
-            groups.setdefault(cell_key(r), []).append(r)
-        return groups, sizes, f"not balanced: {len(kept)} eligible subjects"
-
-    raise SystemExit(f"unknown cohort.balance: {balance!r} (use strict | label | none)")
+    by_label = {lbl: [r for r in rows if r["label"] == lbl] for lbl in ("0", "1")}
+    n = min(len(by_label["0"]), len(by_label["1"]), target_per_label)
+    if max_subjects is not None:
+        n = min(n, max_subjects // 2)
+    groups = {lbl: _take(by_label[lbl], rng, n) for lbl in ("0", "1")}
+    return groups, sizes, (f"balanced (sex free): {n} per label, {n * 2} total "
+                           f"(target {target_per_label} per label)")
 
 
-def split_counts(n: int, ratios: dict) -> dict:
-    """Allocate n items to train/validate/test; remainder favours train.
-
-    When a cell has at least 3 subjects we guarantee validate and test each get
-    at least 1 (borrowing from train), so small test cohorts still populate all
-    three splits. Cells with fewer than 3 can't fill all three, so they're left
-    to the ratio-based rounding.
-    """
-    train = round(n * ratios["train"])
-    validate = round(n * ratios["validate"])
-    test = n - train - validate
-    if test < 0:  # rounding overshoot on tiny cells
-        validate = max(0, validate + test)
-        test = 0
-    if n >= 3:
-        if validate == 0:
-            validate, train = 1, train - 1
-        if test == 0:
-            test, train = 1, train - 1
-    return {"train": train, "validate": validate, "test": test}
+def _record(r: dict) -> dict:
+    """A metadata.csv row -> the dict shape stored in splits.yaml."""
+    return {
+        "subject": r["subject"],
+        "sex": r["sex"],
+        "label": int(r["label"]),
+        "cdr": float(r["cdr"]),   # CDR grade (0.5/1/2) behind label 1
+        "img_path": r["img_path"],
+        "age": int(r["age"]),
+    }
 
 
-def assign_splits(balanced: dict, ratios: dict, rng: random.Random) -> dict:
-    """Stratified subject-level split; each cell is divided independently."""
-    result = {split: [] for split in SPLITS}
-    for members in balanced.values():
-        members = list(members)
-        rng.shuffle(members)
-        counts = split_counts(len(members), ratios)
-        idx = 0
-        for split in SPLITS:
-            for r in members[idx: idx + counts[split]]:
-                result[split].append(
-                    {
-                        "subject": r["subject"],
-                        "sex": r["sex"],
-                        "label": int(r["label"]),
-                        "cdr": float(r["cdr"]),   # CDR grade (0.5/1/2) behind label 1
-                        "img_path": r["img_path"],
-                    }
-                )
-            idx += counts[split]
-    for split in result:
-        result[split].sort(key=lambda r: r["subject"])
-    return result
+def build_train_split(rows: list[dict], exclude_subjects: set[str], rng: random.Random,
+                      max_subjects=None) -> list[dict]:
+    """ALL age_train-eligible subjects not already claimed by validate/test -- every one
+    of them, UNBALANCED, on purpose. No fraction, no cap, other than the optional
+    ``max_subjects`` (for fast test runs)."""
+    pool = [r for r in rows if r["subject"] not in exclude_subjects]
+    if max_subjects is not None:
+        pool = _take(pool, rng, max_subjects)
+    return sorted((_record(r) for r in pool), key=lambda r: r["subject"])
 
 
 def build_summary(splits: dict) -> dict:
@@ -179,28 +143,64 @@ def build_summary(splits: dict) -> dict:
     return summary
 
 
-def print_summary(sizes: dict, info: str, summary: dict) -> None:
-    print("\nEligible (sex, label) cell sizes:")
+def print_targets(eval_draws: list[dict], n_train_elig: int, n_eval_elig: int,
+                  train_actual: int) -> None:
+    """Print each split's TARGET vs ACTUAL count, and the fraction it actually ended up
+    being -- of the (larger) age_train-eligible pool its fraction was computed against,
+    AND of its own (smaller) age_eval-eligible pool, since those two can differ a lot
+    (validate/test's fraction is set against the train-range pool, but drawn only from
+    the eval range -- so as a share of ITS OWN range it typically ends up far bigger than
+    the configured fraction).
+
+    ``eval_draws``: one dict per validate/test draw, each with keys
+    ``split, frac, target_total, target_per_label, sizes, info, actual``.
+    """
+    print("\nTarget vs actual (validate/test fractions are of the age_train-eligible pool, "
+          "but drawn only from age_eval):")
     names = {("M", "0"): "Male/CDR-", ("M", "1"): "Male/CDR+",
              ("F", "0"): "Female/CDR-", ("F", "1"): "Female/CDR+"}
-    for k, v in sizes.items():
-        print(f"  {names[k]:<16} {v}")
-    print(f"\nCohort: {info}\n")
+    for d in eval_draws:
+        print(f"\n  {d['split']}: fraction {d['frac']:.2f} of age_train-eligible "
+              f"({n_train_elig}) -> target {d['target_total']} total "
+              f"({d['target_per_label']}/label)")
+        print(f"    available (sex, label) before this draw, within age_eval:")
+        for k, v in d["sizes"].items():
+            print(f"      {names[k]:<16} {v}")
+        print(f"    drew: {d['info']}")
+        actual = d["actual"]
+        pct_train = 100 * actual / n_train_elig if n_train_elig else float("nan")
+        pct_eval = 100 * actual / n_eval_elig if n_eval_elig else float("nan")
+        print(f"    actual: {actual} subjects = {pct_train:.1f}% of age_train-eligible, "
+              f"{pct_eval:.1f}% of ITS OWN age_eval-eligible pool ({n_eval_elig})")
+    pct_train_actual = 100 * train_actual / n_train_elig if n_train_elig else float("nan")
+    print(f"\n  train: everything else in age_train-eligible, not claimed by validate/test "
+          f"-> {train_actual} subjects = {pct_train_actual:.1f}% of age_train-eligible "
+          f"({n_train_elig})")
+
+
+def print_summary(summary: dict) -> None:
     header = f"  {'split':<8} {'total':>5} {'male':>5} {'female':>7} {'CDR+':>9} {'CDR-':>8}"
-    print(header)
+    print(f"\n{header}")
     for split in SPLITS:
         s = summary[split]
         print(f"  {split:<8} {s['total']:>5} {s['male']:>5} {s['female']:>7} "
               f"{s['cdr_positive']:>9} {s['cdr_negative']:>8}")
 
 
-def plot_age_histograms(rows: list[dict], cohort: dict, out_path: str, labels_cfg: dict) -> None:
-    """Save a 3-panel age histogram of CDR-negative vs CDR-positive for the COHORT band only.
+def plot_age_histograms(rows: list[dict], cohort: dict, splits: dict, out_path: str,
+                        labels_cfg: dict) -> None:
+    """Save a 2x2 age histogram of CDR-negative vs CDR-positive across the TRAIN band,
+    with the narrower EVAL band (validate+test) shaded so both are visible at once.
 
     (Deliberately duplicated from step1's near-identical plot -- this teaching project keeps the
-    two steps self-contained. step1 shows the entire dataset; step2 restricts to the configured
-    age_min..age_max range, i.e. the subjects eligible for the cohort.) Panels: (1) both sexes
-    pooled; (2) sexes separated (line style); (3) raw CDR grade (0 / 0.5 / 1 / 2) separated.
+    two steps self-contained. step1 shows the entire dataset; step2 restricts to the
+    age_train band, i.e. the widest range any subject could be eligible for.) Panels:
+    (1) both sexes pooled; (2) sexes separated (line style); (3) raw CDR grade
+    (0 / 0.5 / 1 / 2) separated; (4) split membership (train/validate/test) -- since
+    validate/test subjects are excluded from train (no leakage, see build_train_split),
+    this panel shows whether validate/test are visibly depleting train of subjects inside
+    the eval band. Some depletion there is expected and not a problem by itself -- this is
+    just visibility into how much.
 
     Note: step2's rows come from metadata.csv, so every field is a string (unlike step1's
     native-typed rows).
@@ -213,7 +213,8 @@ def plot_age_histograms(rows: list[dict], cohort: dict, out_path: str, labels_cf
 
     plt.style.use("seaborn-v0_8-darkgrid")
 
-    amin, amax = cohort["age_min"], cohort["age_max"]
+    tmin, tmax = cohort["age_train"]["min"], cohort["age_train"]["max"]
+    emin, emax = cohort["age_eval"]["min"], cohort["age_eval"]["max"]
     recs = []
     for r in rows:
         if r["label"] not in ("0", "1"):
@@ -226,7 +227,7 @@ def plot_age_histograms(rows: list[dict], cohort: dict, out_path: str, labels_cf
             age, cdr = int(r["age"]), float(r["cdr"])
         except ValueError:
             continue
-        if not (amin <= age <= amax):                # cohort band only
+        if not (tmin <= age <= tmax):                # train band only (the widest one)
             continue
         recs.append((age, r["sex"], int(r["label"]), cdr))
     if not recs:
@@ -238,12 +239,18 @@ def plot_age_histograms(rows: list[dict], cohort: dict, out_path: str, labels_cf
     labels = np.array([l for _, _, l, _ in recs])
     cdrs = np.array([c for _, _, _, c in recs])
 
-    edges = np.arange(amin, amax + 2, 2)           # 2-year bins across the cohort band
+    edges = np.arange(tmin, tmax + 2, 2)            # 2-year bins across the train band
     neg_name = labels_cfg.get("cdr_negative", "CDR Negative")
     pos_name = labels_cfg.get("cdr_positive", "CDR Positive")
     C_NEG, C_POS = "steelblue", "crimson"          # matches CDR- = blue / CDR+ = red elsewhere
 
-    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4.6), sharex=True)
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12.5, 9.4), sharex=True)
+
+    # Shade the narrow eval band (validate+test) inside the wider train band, on every
+    # panel, BEFORE the legend() calls below so the shading gets its own legend entry.
+    for ax in (ax1, ax2, ax3, ax4):
+        ax.axvspan(emin, emax, color="0.4", alpha=0.15, zorder=0,
+                  label="eval band (validate+test)")
 
     # (1) CDR- vs CDR+, both sexes pooled.
     ax1.hist(ages[labels == 0], bins=edges, histtype="stepfilled", alpha=0.55,
@@ -253,32 +260,61 @@ def plot_age_histograms(rows: list[dict], cohort: dict, out_path: str, labels_cf
     ax1.set(title="CDR status vs age (both sexes)", xlabel="age (years)", ylabel="subjects")
     ax1.legend(fontsize=8)
 
-    # (2) CDR- vs CDR+, sexes separated (colour = CDR, solid = Male / dashed = Female).
-    for lbl, colour, name in ((0, C_NEG, neg_name), (1, C_POS, pos_name)):
-        for sex, ls, sname in (("M", "-", "Male"), ("F", "--", "Female")):
-            m = (labels == lbl) & (sexes == sex)
-            if m.any():
-                ax2.hist(ages[m], bins=edges, histtype="step", linewidth=1.6,
-                         color=colour, linestyle=ls, label=f"{name} · {sname}")
+    # Every panel below is STACKED, filled regions (like panel 1) rather than outlines --
+    # stacking keeps sub-groups from just overlapping into an ambiguous blob.
+    def stacked_fill(ax, cats, alpha=0.6):
+        """``cats``: list of (ages_array, colour, legend_label)."""
+        cats = [c for c in cats if len(c[0])]
+        if not cats:
+            return
+        ax.hist([c[0] for c in cats], bins=edges, histtype="stepfilled", stacked=True,
+                alpha=alpha, color=[c[1] for c in cats], label=[c[2] for c in cats])
+
+    # (2) CDR- vs CDR+, sexes separated -- colour FAMILY = sex (Male green, Female purple;
+    # different hues from panels 1/3/4 to avoid clashing with their CDR-status colouring),
+    # SHADE = CDR status (dark = CDR+, light = CDR-).
+    MALE_LIGHT, MALE_DARK = "palegreen", "darkgreen"
+    FEMALE_LIGHT, FEMALE_DARK = "plum", "indigo"
+    cats2 = [(ages[(labels == lbl) & (sexes == sex)], colour, f"{sname} · {name}")
+            for sex, (c_neg, c_pos), sname in (("M", (MALE_LIGHT, MALE_DARK), "Male"),
+                                               ("F", (FEMALE_LIGHT, FEMALE_DARK), "Female"))
+            for lbl, colour, name in ((0, c_neg, neg_name), (1, c_pos, pos_name))]
+    stacked_fill(ax2, cats2)
     ax2.set(title="CDR status vs age (sexes separated)", xlabel="age (years)")
     ax2.legend(fontsize=7)
 
-    # (3) Raw CDR grade separated (both sexes pooled).
+    # (3) Raw CDR grade separated (both sexes pooled) -- each grade already has its own
+    # colour.
     grade_colours = {0.0: "steelblue", 0.5: "gold", 1.0: "darkorange", 2.0: "crimson"}
-    for g in (0.0, 0.5, 1.0, 2.0):
-        m = cdrs == g
-        if m.any():
-            ax3.hist(ages[m], bins=edges, histtype="step", linewidth=1.8,
-                     color=grade_colours[g], label=f"CDR {g:g}")
+    cats3 = [(ages[cdrs == g], grade_colours[g], f"CDR {g:g}")
+            for g in (0.0, 0.5, 1.0, 2.0)]
+    stacked_fill(ax3, cats3, alpha=0.7)
     ax3.set(title="CDR grade vs age (both sexes)", xlabel="age (years)")
     ax3.legend(fontsize=8)
 
-    for ax in (ax1, ax2, ax3):                      # integer counts -> integer y ticks
-        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    ax1.set_xlim(amin, amax)                        # shared x -> clamps all panels to the band
+    # (4) CDR- vs CDR+, train vs eval (validate+test combined) -- colour FAMILY = split
+    # (train blue, validate+test red), SHADE = CDR status (dark = CDR+, light = CDR-).
+    # Stacking means, inside the shaded eval band, each bar visibly splits into its train
+    # portion (bottom) and validate+test portion (top) -- exactly how much of that age
+    # range's subjects validate/test took from train.
+    TRAIN_LIGHT, TRAIN_DARK = "lightskyblue", "navy"
+    EVAL_LIGHT, EVAL_DARK = "lightsalmon", "darkred"
+    groups = (("train", ("train",), (TRAIN_LIGHT, TRAIN_DARK)),
+             ("validate+test", ("validate", "test"), (EVAL_LIGHT, EVAL_DARK)))
+    cats4 = [(np.array([m["age"] for s in split_names for m in splits.get(s, [])
+                       if m["label"] == lbl]), colour, f"{group_name} · {name}")
+            for group_name, split_names, (c_neg, c_pos) in groups
+            for lbl, colour, name in ((0, c_neg, neg_name), (1, c_pos, pos_name))]
+    stacked_fill(ax4, cats4)
+    ax4.set(title="CDR status by split (train vs validate+test)", xlabel="age (years)")
+    ax4.legend(fontsize=7)
 
-    fig.suptitle(f"OASIS-1 age distribution by CDR status -- cohort band (age {amin}-{amax})",
-                 fontsize=11)
+    for ax in (ax1, ax2, ax3, ax4):                 # integer counts -> integer y ticks
+        ax.yaxis.set_major_locator(MaxNLocator(integer=True))
+    ax1.set_xlim(tmin, tmax)                        # shared x -> clamps all panels to the band
+
+    fig.suptitle(f"OASIS-1 age distribution by CDR status -- train band {tmin}-{tmax} "
+                f"(eval band {emin}-{emax} shaded)", fontsize=11)
     fig.tight_layout(rect=(0, 0, 1, 0.96))
     fig.savefig(out_path, dpi=120)
     plt.close(fig)
@@ -291,31 +327,65 @@ def main() -> None:
     args = ap.parse_args()
 
     config = load_config(args.config)
-    rng = random.Random(config["cohort"]["seed"])
+    cohort = config["cohort"]
+    rng = random.Random(cohort["seed"])
 
     rows = read_metadata(metadata_csv(config))
-    elig = eligible_rows(rows, config["cohort"])
-    c = config["cohort"]
-    print(f"Eligible age {c['age_min']}-{c['age_max']} labelled subjects with images: {len(elig)}")
 
-    groups, sizes, info = select_cohort(
-        elig, config["cohort"]["balance"], rng, config["cohort"].get("max_subjects")
-    )
-    total = sum(len(v) for v in groups.values())
-    if total == 0:
-        print("\nNo cohort selected (no eligible subjects).")
-        print("Widen the cohort (age range / balance) or extract more discs, then re-run.")
+    eval_elig = eligible_rows(rows, cohort["age_eval"]["min"], cohort["age_eval"]["max"])
+    train_elig = eligible_rows(rows, cohort["age_train"]["min"], cohort["age_train"]["max"])
+    print(f"Eligible age_eval {cohort['age_eval']['min']}-{cohort['age_eval']['max']} "
+          f"labelled subjects with images: {len(eval_elig)}")
+    print(f"Eligible age_train {cohort['age_train']['min']}-{cohort['age_train']['max']} "
+          f"labelled subjects with images: {len(train_elig)}")
 
-    splits = assign_splits(groups, config["splits"], rng)
+    ratios = config["splits"]
+    n_train_elig = len(train_elig)
+    n_eval_elig = len(eval_elig)
+
+    # VALIDATE, then TEST: each is drawn from whatever's currently left of the age_eval-
+    # eligible pool, balanced, capped at its OWN fraction of the age_train-eligible pool
+    # (not the age_eval pool it's actually drawn from -- see config.yaml `splits:`).
+    remaining_eval_pool = list(eval_elig)
+    eval_out: dict[str, list[dict]] = {}
+    eval_draws = []
+    for split in ("validate", "test"):
+        frac = ratios[split]
+        target_total = round(frac * n_train_elig)
+        target_per_label = target_total // 2
+        groups, sizes, info = select_balanced_eval_cohort(
+            remaining_eval_pool, target_per_label, rng, cohort.get("max_subjects")
+        )
+        chosen = groups["0"] + groups["1"]
+        chosen_ids = {r["subject"] for r in chosen}
+        remaining_eval_pool = [r for r in remaining_eval_pool if r["subject"] not in chosen_ids]
+        eval_out[split] = sorted((_record(r) for r in chosen), key=lambda r: r["subject"])
+        eval_draws.append({"split": split, "frac": frac, "target_total": target_total,
+                           "target_per_label": target_per_label, "sizes": sizes,
+                           "info": info, "actual": len(chosen)})
+
+    eval_subject_ids = {r["subject"] for r in eval_out["validate"] + eval_out["test"]}
+    if not eval_subject_ids:
+        print("\nNo eval cohort selected (no eligible subjects in the age_eval band).")
+        print("Widen age_eval, raise the validate/test fractions, or extract more discs.")
+
+    # TRAIN: everything else in age_train-eligible, not claimed by validate/test above.
+    train_members = build_train_split(train_elig, eval_subject_ids, rng,
+                                      cohort.get("max_subjects"))
+
+    splits = {"train": train_members, "validate": eval_out["validate"], "test": eval_out["test"]}
     summary = build_summary(splits)
-    print_summary(sizes, info, summary)
+    print_targets(eval_draws, n_train_elig, n_eval_elig, len(train_members))
+    print_summary(summary)
 
     out = {
         "meta": {
-            "cohort": config["cohort"],
-            "split_ratios": config["splits"],
-            "balance": config["cohort"]["balance"],
-            "cohort_total": total,
+            "cohort": cohort,
+            "split_ratios": ratios,
+            "n_train_eligible": n_train_elig,
+            "n_eval_eligible": n_eval_elig,
+            "validate_target": eval_draws[0]["target_total"],
+            "test_target": eval_draws[1]["target_total"],
             "summary": summary,
         },
         **{split: splits[split] for split in SPLITS},
@@ -329,8 +399,8 @@ def main() -> None:
     # Age-distribution figure over all labelled subjects (shows the age/sex confound).
     outputs_path = config["outputs_path"]
     os.makedirs(outputs_path, exist_ok=True)
-    plot_age_histograms(rows, config["cohort"],
-                        os.path.join(outputs_path, "cohort_age_histograms.png"),
+    plot_age_histograms(rows, cohort, splits,
+                        os.path.join(outputs_path, "step2-cohort_age_histograms.png"),
                         config.get("labels") or {})
 
 

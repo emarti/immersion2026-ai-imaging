@@ -1,22 +1,23 @@
 #!/usr/bin/env python3
-"""Step 4b: DROPOUT sample -- no dropout (regularization removed).
+"""Step 4: train the CNN.
 
-Design 4b -- identical to the baseline 4a (three conv blocks 1 -> 8 -> 16 -> 32) but
-with dropout turned OFF (0.0 / 0.0). It samples the "no regularization" direction:
-expect training accuracy to race toward ~100% while validation lags -- the classic
-overfitting signature. Each block is Conv(3x3, pad 1) -> BatchNorm -> ReLU -> MaxPool(2),
-then global average pooling and a small 2-layer classifier. Binary output (CDR-positive=1 vs
-CDR-negative=0) trained with BCEWithLogitsLoss + AdamW.
+Three conv blocks 1 -> 8 -> 16 -> 32 with moderate dropout (0.6 / 0.2). Each block is
+Conv(3x3, pad 1) -> BatchNorm -> ReLU -> MaxPool(2), then global average pooling and a
+small 2-layer classifier. Binary output (CDR-positive=1 vs CDR-negative=0) trained with
+BCEWithLogitsLoss + AdamW.
 
 Each epoch trains on the training split and evaluates on the validation split;
-per-epoch train/val loss and accuracy are written to
-``outputs/training_log_4b.csv``, and the final weights to ``outputs/model_4b.pt``
-(step6 reads them for Grad-CAM). step5 overlays the CSVs from all designs (4a-4d).
+per-epoch train/val loss, accuracy, sensitivity/specificity, balanced accuracy, and AUC
+are written to ``outputs/training_log_4.csv``, and the final weights to
+``outputs/model_4.pt`` (step6 and step7 both reload this checkpoint).
 
-This file is self-contained (the step4 designs differ only in ``Net``).
+``training.balanced_loss`` in config.yaml (default on) weights the loss by the TRAIN
+split's actual class counts (``pos_weight = n_cdr_negative / n_cdr_positive``), so the
+loss doesn't just track plain accuracy -- see config.yaml's comment for why this matters
+now that ``cohort.age_train`` deliberately leaves train class-imbalanced.
 
 Usage:
-    python step4a-train-network.py [--epochs N]
+    python step4-train-network.py [--epochs N]
 """
 from __future__ import annotations
 
@@ -29,13 +30,14 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from PIL import Image
+from sklearn.metrics import roc_auc_score
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 
 from common import load_config, load_yaml, manifest_yaml
 
-CSV_NAME = "training_log_4b.csv"
-MODEL_NAME = "model_4b.pt"
+CSV_NAME = "training_log_4.csv"
+MODEL_NAME = "model_4.pt"
 
 
 class OASISSlices(Dataset):
@@ -59,7 +61,7 @@ class OASISSlices(Dataset):
 
 
 class Net(nn.Module):
-    """Design 4b: baseline 8-16-32 but NO dropout (0.0 / 0.0) -- overfitting demo."""
+    """3 conv blocks 1 -> 8 -> 16 -> 32, moderate dropout (0.6 / 0.2)."""
 
     def __init__(self):
         super(Net, self).__init__()
@@ -70,13 +72,13 @@ class Net(nn.Module):
         self.conv3 = nn.Conv2d(16, 32, 3, 1, padding=1)
         self.bn3 = nn.BatchNorm2d(32)
         self.gap = nn.AdaptiveAvgPool2d((1, 1))
-        self.dropout1 = nn.Dropout(0.0)
+        self.dropout1 = nn.Dropout(0.6)
         self.fc1 = nn.Linear(32, 64)
-        self.dropout2 = nn.Dropout(0.0)
+        self.dropout2 = nn.Dropout(0.2)
         self.fc2 = nn.Linear(64, 1)
 
     def forward(self, x):
-        # Input is N x 1 x 84 x 68 (a left/right hippocampus patch from step3).
+        # Input is N x 1 x 76 x 60 (a left/right hippocampus patch from step3).
         # AdaptiveAvgPool makes the exact spatial size irrelevant.
         x = F.max_pool2d(F.relu(self.bn1(self.conv1(x))), 2)      # -> 8 channels
         x = F.max_pool2d(F.relu(self.bn2(self.conv2(x))), 2)      # -> 16 channels
@@ -90,7 +92,7 @@ class Net(nn.Module):
         return x.squeeze(1)                                       # -> (N,)
 
 
-def train(model, device, train_loader, optimizer):
+def train(model, device, train_loader, optimizer, pos_weight=None):
     """Train one epoch; return this epoch's average loss and accuracy."""
     model.train()
     loss_sum = 0.0
@@ -99,7 +101,7 @@ def train(model, device, train_loader, optimizer):
         data, target = data.to(device), target.to(device)
         optimizer.zero_grad()
         output = model(data)
-        loss = F.binary_cross_entropy_with_logits(output, target)  # nn.BCEWithLogitsLoss
+        loss = F.binary_cross_entropy_with_logits(output, target, pos_weight=pos_weight)
         loss.backward()
         optimizer.step()
         loss_sum += loss.item() * len(data)
@@ -111,26 +113,29 @@ def train(model, device, train_loader, optimizer):
 GRADES = (0.5, 1.0, 2.0)   # CDR-positive severities pooled under label 1
 
 
-def evaluate(model, device, loader):
-    """Evaluate (no training); return loss, accuracy, sensitivity, specificity, and
+def evaluate(model, device, loader, pos_weight=None):
+    """Evaluate (no training); return loss, accuracy, sensitivity, specificity, AUC, and
     a per-CDR-grade accuracy dict for the CDR-positive grades 0.5 / 1 / 2.
 
     Positive class = CDR-positive (label 1). sensitivity = TP/(TP+FN) (recall of
-    CDR-positive), specificity = TN/(TN+FP) (recall of CDR-negative). Per-grade accuracy is
-    the recall within that grade (all its patches are label 1); nan if the grade has
-    no patches in this split.
+    CDR-positive), specificity = TN/(TN+FP) (recall of CDR-negative). AUC is computed from
+    the raw predicted probabilities (sigmoid of the logit), independent of the 0.5
+    threshold used for the other metrics. Per-grade accuracy is the recall within that
+    grade (all its patches are label 1); nan if the grade has no patches in this split.
     """
     model.eval()
     loss_sum = 0.0
     tp = tn = fp = fn = 0
     g_correct = {g: 0 for g in GRADES}
     g_total = {g: 0 for g in GRADES}
+    all_probs = []
+    all_targets = []
     with torch.no_grad():
         for data, target, cdr in loader:
             data, target = data.to(device), target.to(device)
             output = model(data)
             loss_sum += F.binary_cross_entropy_with_logits(
-                output, target, reduction='sum').item()
+                output, target, pos_weight=pos_weight, reduction='sum').item()
             pred = (output > 0).float()                          # logit > 0 <=> prob > 0.5
             tp += int(((pred == 1) & (target == 1)).sum())
             tn += int(((pred == 0) & (target == 0)).sum())
@@ -141,17 +146,22 @@ def evaluate(model, device, loader):
                 mask = cdr == g
                 g_total[g] += int(mask.sum())
                 g_correct[g] += int((correct & mask).sum())
+            all_probs.append(torch.sigmoid(output).cpu())
+            all_targets.append(target.cpu())
     n = len(loader.dataset)
     acc = (tp + tn) / n
     sens = tp / (tp + fn) if (tp + fn) else 0.0
     spec = tn / (tn + fp) if (tn + fp) else 0.0
+    probs = torch.cat(all_probs).numpy()
+    targets = torch.cat(all_targets).numpy()
+    auc = roc_auc_score(targets, probs) if len(set(targets.tolist())) == 2 else float("nan")
     grade_acc = {g: (g_correct[g] / g_total[g] if g_total[g] else float("nan"))
                  for g in GRADES}
-    return loss_sum / n, acc, sens, spec, grade_acc
+    return loss_sum / n, acc, sens, spec, auc, grade_acc
 
 
 def main():
-    parser = argparse.ArgumentParser(description='OASIS CNN design 4b (8-16-32, no dropout)')
+    parser = argparse.ArgumentParser(description='OASIS CNN training (step4)')
     parser.add_argument('--batch-size', type=int, default=32, metavar='N',
                         help='input batch size (default: 32)')
     parser.add_argument('--epochs', type=int, default=None, metavar='N',
@@ -191,16 +201,33 @@ def main():
     val_loader = DataLoader(val_ds, batch_size=args.batch_size)
     print(f"Training on {len(train_ds)} slices, validating on {len(val_ds)}")
 
+    # A data-driven pos_weight for BCEWithLogitsLoss (see config.yaml `training:` comment).
+    # Computed from the TRAIN split's own patch counts, not hardcoded.
+    if config.get("training", {}).get("balanced_loss", True):
+        n_pos = sum(1 for r in train_ds.rows if int(r["label"]) == 1)
+        n_neg = len(train_ds.rows) - n_pos
+        if n_pos > 0:
+            pos_weight = torch.tensor([n_neg / n_pos], device=device)
+            print(f"Balanced loss on: train has {n_neg} CDR-negative / {n_pos} CDR-positive "
+                  f"patches -> pos_weight={pos_weight.item():.3f}")
+        else:
+            pos_weight = None
+            print("Balanced loss on, but train has 0 CDR-positive patches -> pos_weight=1.0")
+    else:
+        pos_weight = None
+        print("Balanced loss off (training.balanced_loss: false) -- plain BCEWithLogitsLoss")
+
     model = Net().to(device)
     optimizer = optim.AdamW(model.parameters(), lr=args.lr,
                             weight_decay=args.weight_decay)
 
     history = {k: [] for k in ("train_loss", "train_acc", "val_loss", "val_acc",
-                               "val_sens", "val_spec", "val_bal",
+                               "val_sens", "val_spec", "val_bal", "val_auc",
                                "val_cdr05", "val_cdr10", "val_cdr20")}
     for epoch in range(1, epochs + 1):
-        tr_loss, tr_acc = train(model, device, train_loader, optimizer)
-        va_loss, va_acc, va_sens, va_spec, va_grade = evaluate(model, device, val_loader)
+        tr_loss, tr_acc = train(model, device, train_loader, optimizer, pos_weight)
+        va_loss, va_acc, va_sens, va_spec, va_auc, va_grade = evaluate(
+            model, device, val_loader, pos_weight)
         va_bal = (va_sens + va_spec) / 2
         history["train_loss"].append(tr_loss)
         history["train_acc"].append(tr_acc)
@@ -209,30 +236,31 @@ def main():
         history["val_sens"].append(va_sens)
         history["val_spec"].append(va_spec)
         history["val_bal"].append(va_bal)
+        history["val_auc"].append(va_auc)
         history["val_cdr05"].append(va_grade[0.5])
         history["val_cdr10"].append(va_grade[1.0])
         history["val_cdr20"].append(va_grade[2.0])
         print(f"Epoch {epoch:3d}/{epochs}   "
               f"train loss {tr_loss:.4f} acc {tr_acc:.3f}   "
               f"val loss {va_loss:.4f} acc {va_acc:.3f} "
-              f"sens {va_sens:.3f} spec {va_spec:.3f} bal {va_bal:.3f}")
+              f"sens {va_sens:.3f} spec {va_spec:.3f} bal {va_bal:.3f} auc {va_auc:.3f}")
 
     # Save the per-epoch numbers as a text file (CSV); step5 plots it.
     log_path = os.path.join(outputs_path, CSV_NAME)
     with open(log_path, "w") as f:
         f.write("epoch,train_loss,train_acc,val_loss,val_acc,val_sens,val_spec,val_bal_acc,"
-                "val_acc_cdr05,val_acc_cdr10,val_acc_cdr20\n")
+                "val_auc,val_acc_cdr05,val_acc_cdr10,val_acc_cdr20\n")
         for epoch in range(1, epochs + 1):
             i = epoch - 1
             f.write(f"{epoch},{history['train_loss'][i]:.6f},{history['train_acc'][i]:.6f},"
                     f"{history['val_loss'][i]:.6f},{history['val_acc'][i]:.6f},"
                     f"{history['val_sens'][i]:.6f},{history['val_spec'][i]:.6f},"
-                    f"{history['val_bal'][i]:.6f},"
+                    f"{history['val_bal'][i]:.6f},{history['val_auc'][i]:.6f},"
                     f"{history['val_cdr05'][i]:.6f},{history['val_cdr10'][i]:.6f},"
                     f"{history['val_cdr20'][i]:.6f}\n")
     print(f"Saved training log -> {log_path}")
     model_path = os.path.join(outputs_path, MODEL_NAME)
-    torch.save(model.state_dict(), model_path)      # step6 (Grad-CAM) reloads this
+    torch.save(model.state_dict(), model_path)      # step6/step7 reload this
     print(f"Saved model weights -> {model_path}")
     elapsed = time.perf_counter() - start
     print(f"Run time: {elapsed:.1f} s "

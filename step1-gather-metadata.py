@@ -4,9 +4,9 @@
 Walks every ``disc*/OAS1_XXXX_MRy/OAS1_XXXX_MRy.txt`` under the configured data
 root, parses age / sex / CDR (and MMSE for reference), locates the matching
 brain-masked atlas volume, derives the binary dementia label, and writes a
-tidy ``metadata.csv``. It also saves ``outputs/dataset_age_histograms.png`` -- CDR-negative
-vs CDR-positive counts by age over the *entire* dataset (step2 makes the same plot restricted
-to the cohort's age range).
+tidy ``metadata.csv``. It also saves ``outputs/step1-dataset_age_histograms.png`` --
+CDR-negative vs CDR-positive counts by age over the *entire* dataset (step2 makes the same
+plot restricted to the cohort's age range).
 
 Label rule (from the OASIS fact sheet):
     CDR == 0            -> 0  (CDR-negative)
@@ -340,7 +340,7 @@ def main() -> None:
 
     outputs_path = config["outputs_path"]
     os.makedirs(outputs_path, exist_ok=True)
-    plot_age_histograms(rows, os.path.join(outputs_path, "dataset_age_histograms.png"),
+    plot_age_histograms(rows, os.path.join(outputs_path, "step1-dataset_age_histograms.png"),
                         config.get("labels") or {})
 
     if not args.skip_validate:

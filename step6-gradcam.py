@@ -20,21 +20,22 @@ original Torch implementation https://github.com/ramprs/grad-cam and the PyTorch
 backward-hook approach discussed at
 https://discuss.pytorch.org/t/grad-cam-implementation-in-pytorch-backward-on-model/3554/7
 
-This step writes two views: (1) a montage ``gradcam_grid.png`` (plus per-patch overlays in
-``outputs/gradcam/``) over a sample of patches; and (2) per-subject **whole-slice context**
+This step writes two views: (1) a montage ``step6-gradcam_grid.png`` (plus per-patch
+overlays in ``outputs/gradcam/``) over a sample of patches; and (2) per-subject
+**whole-slice context**
 overlays in ``outputs/gradcam_context/`` -- the same heatmaps drawn back onto the full axial
 slice at the left/right hippocampus crop boxes. The context pass reloads the raw volume, so
 it needs the raw data (``DATA_RAW_PATH``).
 
-Needs a trained checkpoint from step4 (``outputs/model_4{design}.pt``); reads the same
+Needs a trained checkpoint from step4 (``outputs/model_4.pt``); reads the same
 ``config.yaml`` / ``manifest.yaml`` as the rest of the pipeline.
 
 Options live in ``config.yaml`` under ``gradcam:`` (which checkpoint, split, sample count,
 seed, overlay opacity); any can be overridden on the command line.
 
 Usage:
-    python step6-gradcam.py                          # uses config.yaml (defaults to model_4a.pt)
-    python step6-gradcam.py --model model_4c.pt --split test --n 16
+    python step6-gradcam.py                          # uses config.yaml (defaults to model_4.pt)
+    python step6-gradcam.py --split test --n 16
 """
 from __future__ import annotations
 
@@ -42,7 +43,6 @@ import argparse
 import importlib.util
 import os
 import random
-import re
 
 import numpy as np
 import torch
@@ -52,13 +52,13 @@ from PIL import Image
 from common import load_config, load_yaml, manifest_yaml
 
 
-def load_design_net(design: str):
-    """Import the ``Net`` class from the matching step4 script (no architecture copy)."""
-    fname = f"step4{design}-train-network.py"
+def load_net():
+    """Import the ``Net`` class from step4-train-network.py (no architecture copy)."""
+    fname = "step4-train-network.py"
     path = os.path.join(os.path.dirname(os.path.abspath(__file__)), fname)
     if not os.path.isfile(path):
-        raise SystemExit(f"No such design script: {fname}")
-    spec = importlib.util.spec_from_file_location(f"step4{design}", path)
+        raise SystemExit(f"No such script: {fname}")
+    spec = importlib.util.spec_from_file_location("step4_train_network", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.Net
@@ -92,7 +92,7 @@ def grad_cam(model, x):
     ``x`` is a 1x1xHxW tensor. Returns ``(cam_pos, cam_neg, logit)``: the CDR-positive map
     ``ReLU(+raw)`` and the CDR-negative map ``ReLU(-raw)`` where ``raw = sum_k alpha_k A_k``
     is the signed importance map. The two are complementary (disjoint lobes of one map). Hooks
-    ``model.gap`` -- present in every design -- to grab the feature map ``A`` and ``dz/dA``.
+    ``model.gap`` (the global-average-pool layer) to grab the feature map ``A`` and ``dz/dA``.
     """
     captured = {}
 
@@ -178,7 +178,7 @@ def main():
 
     parser = argparse.ArgumentParser(description="Grad-CAM heatmaps for a trained OASIS design")
     parser.add_argument("--model", default=None,
-                        help="checkpoint to explain, e.g. model_4c.pt (default: config gradcam.model)")
+                        help="checkpoint to explain, e.g. model_4.pt (default: config gradcam.model)")
     parser.add_argument("--split", default=None, choices=["train", "validate", "test"],
                         help="split to sample patches from (default: config gradcam.split)")
     parser.add_argument("--n", type=int, default=None, help="number of patches (default: config)")
@@ -194,24 +194,17 @@ def main():
     name_pos = labels.get("cdr_positive", "CDR Positive")   # label 1 display name
 
     # Resolve each option: CLI override -> config `gradcam.*` -> hardcoded fallback.
-    model_name = args.model or gc.get("model", "model_4a.pt")
+    model_name = args.model or gc.get("model", "model_4.pt")
     split = args.split or gc.get("split", "validate")
     n = args.n if args.n is not None else int(gc.get("n_samples", 12))
     seed = args.seed if args.seed is not None else int(gc.get("seed", 0))
     alpha = args.alpha if args.alpha is not None else float(gc.get("overlay_alpha", 0.45))
 
-    # Infer the architecture from the checkpoint name (model_4X.pt) so config names the
-    # file explicitly, not a bare design letter.
-    m = re.fullmatch(r"model_4([a-d])\.pt", os.path.basename(model_name))
-    if not m:
-        raise SystemExit(f"gradcam model must be named like 'model_4a.pt' (got '{model_name}').")
-    design = m.group(1)
-
     model_path = os.path.join(outputs_path, model_name)
     if not os.path.isfile(model_path):
         raise SystemExit(f"Checkpoint not found: {model_path}\n"
-                         f"Run `python step4{design}-train-network.py` first.")
-    Net = load_design_net(design)
+                         f"Run `python step4-train-network.py` first.")
+    Net = load_net()
     model = Net()
     model.load_state_dict(torch.load(model_path, map_location="cpu"))
     model.eval()                                  # dropout off, BN in eval -> deterministic
@@ -244,7 +237,7 @@ def main():
             ax.set_title(name, fontsize=8)
         fig.suptitle(title, fontsize=8, color=colour)
         fig.tight_layout()
-        fname = f"gradcam_4{design}_{row['subject']}_{row['side']}_lbl{int(row['label'])}.png"
+        fname = f"gradcam_{row['subject']}_{row['side']}_lbl{int(row['label'])}.png"
         fig.savefig(os.path.join(out_dir, fname), dpi=120, bbox_inches="tight")
         plt.close(fig)
         panels.append((gray, cam_neg, cam_pos, title, colour))
@@ -259,11 +252,11 @@ def main():
             ax.imshow(gray, cmap="gray")
             ax.imshow(cam, cmap=cmap, alpha=alpha, vmin=0.0, vmax=1.0)
         ax_h.set_title(title, fontsize=7, color=colour, loc="left")
-    fig.suptitle(f"Grad-CAM (design 4{design})    "
+    fig.suptitle(f"Grad-CAM    "
                  f"left/blue = pushes toward {name_neg}    ·    right/red = pushes toward {name_pos}",
                  fontsize=10)
     fig.tight_layout()
-    grid_path = os.path.join(outputs_path, "gradcam_grid.png")
+    grid_path = os.path.join(outputs_path, "step6-gradcam_grid.png")
     fig.savefig(grid_path, dpi=120)
     plt.close(fig)
 
@@ -329,7 +322,7 @@ def main():
                      f"P(CDR+)  L = {probs['L']:.2f}   R = {probs['R']:.2f}",
                      fontsize=11, color=truth_color(true))
         fig.tight_layout()
-        out = os.path.join(ctx_dir, f"gradcam_ctx_4{design}_{subject}.png")
+        out = os.path.join(ctx_dir, f"gradcam_ctx_{subject}.png")
         fig.savefig(out, dpi=130, bbox_inches="tight")
         plt.close(fig)
         ctx_saved += 1

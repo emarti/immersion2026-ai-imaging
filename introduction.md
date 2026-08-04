@@ -379,6 +379,121 @@ extension of the plots (see §14).
 The step4 scripts print all four every epoch and save them to a CSV; step5 also reports
 each design's average over the last 20 epochs.
 
+### Cross-entropy loss and Gibbs' inequality, in more depth
+
+§5 introduced cross-entropy as "punishes confident wrong answers a lot, correct
+confident answers a little" — enough to train with. But it isn't an arbitrary choice; it
+comes from information theory, and the same idea resurfaces in step7's "bits of
+information" diagnostic (`step7-stack-predictors.py`). This subsection works through the
+actual formula and the inequality that makes step7's bits numbers meaningful rather than
+made up.
+
+**The formula, for one prediction.** Say the true label is `y` (1 for CDR-positive, 0 for
+CDR-negative) and the model's predicted probability of CDR-positive is `p`. The per-example
+cross-entropy loss (this is exactly what `BCEWithLogitsLoss` computes, using the natural
+log `ln`, which gives units called **nats**) is:
+
+```
+loss = -[ y * ln(p) + (1 - y) * ln(1 - p) ]
+```
+
+Only one of the two terms is ever "active": if `y = 1` the loss is `-ln(p)`; if `y = 0`
+it's `-ln(1 - p)`. Either way, the loss is `-ln(probability the model assigned to the
+TRUE answer)`. That single fact is the whole intuition from §5, made precise:
+
+- A confident, correct prediction (`p = 0.99` when `y = 1`) gives `-ln(0.99) ≈ 0.01` —
+  almost no penalty.
+- A confident, WRONG prediction (`p = 0.01` when `y = 1`) gives `-ln(0.01) ≈ 4.6` — a
+  large penalty, and as `p → 0` the loss shoots to infinity. There is no probability so
+  small that being confidently wrong is "cheap."
+- An honest "I don't know" (`p = 0.5`) always gives `-ln(0.5) ≈ 0.69`, regardless of the
+  true answer — admitting uncertainty costs a fixed, moderate amount.
+
+Training averages this loss over a batch and nudges the weights to shrink it (§5):
+smaller loss means the model's probabilities are, on average, closer to being right, and
+confidently so.
+
+**From one prediction to a whole distribution.** Instead of a single 0/1 label, imagine
+CDR status has some true underlying rate of being positive in a population, `q` (e.g.
+0.5, since our splits are deliberately balanced — §6 above). The model outputs its own
+rate, `p`. Averaged over many examples, the formula above computes exactly the **cross-entropy
+between `q` and `p`**, written `H(q, p)`. Two special cases of that formula matter:
+
+- **Entropy**, `H(q) = H(q, q)` — the cross-entropy of a distribution *with itself*. It's
+  the fewest units needed, on average, to describe an outcome drawn from `q`. A
+  population that's 100% one class has `H(q) = 0` — no uncertainty, nothing to describe.
+  A 50/50 population has the *maximum* possible entropy for two classes — exactly **1
+  bit** (using `log` base 2, the natural unit for "how many yes/no questions does this
+  take on average") — you genuinely need a full yes/no answer every time.
+- **Cross-entropy**, `H(q, p)` — what you get when you *measure* outcomes from the true
+  distribution `q` but *describe* them assuming a possibly-wrong distribution `p` (the
+  model's guess). This is what the training loss actually computes, batch by batch.
+  (The base of the logarithm only changes the unit — natural log gives nats, what
+  PyTorch computes; log base 2 gives bits, what step7 reports. Gibbs' inequality below
+  holds in either base; switching base just rescales every term by the same constant.)
+
+**Gibbs' inequality** is the fact that ties these two together:
+
+> `H(q, p) ≥ H(q)`, always — with equality only when `p` and `q` are the exact same
+> distribution.
+
+In words: **you can never describe outcomes more efficiently using the wrong
+distribution than using the true one.** Guessing anything other than the real
+probabilities can only cost extra, never save anything. That extra cost has a name — the
+**Kullback-Leibler (KL) divergence**, `KL(q || p) = H(q, p) - H(q)` — and Gibbs'
+inequality is exactly the statement `KL(q || p) ≥ 0`.
+
+> **Why it's true (short version).** `KL(q || p)` is the average, over outcomes drawn
+> from `q`, of `-log(p/q)`. The function `-log(x)` curves upward (it's *convex*), so by
+> Jensen's inequality, the average of `-log` of something is at least `-log` of the
+> average of that something. Averaging `p/q` weighted by `q` just gives back the sum of
+> `p`, which is 1 (probabilities always sum to 1) — so `KL(q || p) ≥ -log(1) = 0`. Equality
+> needs `p/q` to be the *same* constant for every outcome, which — since both distributions
+> sum to 1 — forces that constant to be exactly 1, i.e. `p = q`.
+
+**A worked example, in bits.** Suppose the true rate is `q = 0.5` CDR-positive (our
+balanced splits), but a miscalibrated model always outputs `p = 0.9` no matter the input
+— it's overconfident. Its cross-entropy, averaged over many true 50/50 draws (using
+`log` base 2 throughout, so the answer is in bits):
+
+```
+H(q, p) = -0.5 * log2(0.9) - 0.5 * log2(0.1)
+        ≈  0.5 * 0.152    +  0.5 * 3.322
+        ≈  1.74 bits
+```
+
+Compare to the true entropy, `H(q) = 1` bit (the same formula with `p = q = 0.5`).
+**1.74 > 1**, exactly as Gibbs' inequality demands: the overconfident, miscalibrated
+model's cross-entropy overshoots the true uncertainty. The only `p` that would bring
+`H(q, p)` back down to exactly 1 bit is `p = 0.5` itself — the true distribution.
+
+**Why any of this matters here:**
+
+- **It's why cross-entropy is the loss, and not just accuracy or something ad hoc.**
+  Because of Gibbs' inequality, cross-entropy is *minimized*, over every possible choice
+  of `p`, *exactly* when `p = q` — the true probabilities. Training a network to
+  minimize cross-entropy is therefore, in principle, training it to output *calibrated,
+  honest probabilities* of CDR-positive, not merely the right yes/no answer. Plain
+  accuracy has no such property — it's flat almost everywhere, so it gives gradient
+  descent nothing to climb down.
+- **It's the backbone of step7's "bits of information" diagnostic.**
+  `step7-stack-predictors.py` fits a small logistic regression on age, nWBV, and the
+  CNN's score, then measures each one's cross-entropy on held-out VALIDATE data (never
+  the data it was fit on). Because of Gibbs' inequality, that measured cross-entropy can
+  never come in *below* the true conditional entropy of CDR status given that predictor
+  — so `(baseline entropy) − (measured cross-entropy)` is a guaranteed **lower bound** on
+  how many bits of real information the predictor carries about CDR status, never an
+  overestimate. It is not the exact number of bits — a poorly calibrated model
+  understates it further — but it can never lie in the *other* direction. See the
+  summary step7 prints (`outputs/step7-stacking_summary.txt`) for the actual numbers and
+  their confidence intervals.
+
+> **Key idea.** Cross-entropy is minimized only by telling the truth, probabilistically
+> speaking — Gibbs' inequality is the reason why. That single fact is both why
+> cross-entropy makes a good training loss, and why, measured out of sample after
+> training, it can be turned into a lower bound on how much real information a predictor
+> carries.
+
 ---
 
 ## 7. The central challenge: overfitting
@@ -555,6 +670,13 @@ boxes look too large or off-centre, that's your cue to tighten `hippocampus.ap` 
 > them would be equally valid — just unnecessary — and keeping each patch a *faithful* crop of
 > the real slice is what lets step 6 draw its Grad-CAM boxes back onto the actual brain (§13).
 > (If you'd rather collapse the two into one answer per person, see "Vote per subject" in §14.)
+>
+> This box is about the *static* left/right crop-box mirroring, which is always on and applies
+> to every split. Separately, TRAIN patches can now *also* be randomly flipped and rotated as
+> an explicit, optional augmentation (`hippocampus.apply_random_reflections_rotations` — see
+> §14's "Augment with rotations and flips," now implemented). That one deliberately breaks the
+> "faithful crop" property above for TRAIN only — validation/test are untouched, so step 6's
+> Grad-CAM boxes stay accurate there regardless.
 
 **Split by subject, not by slice.** This one prevents a silent disaster called **data
 leakage**. Because a person's patches are near-duplicates, if some of their patches
@@ -841,12 +963,25 @@ regression on brain size, etc. is a competitive or even better than AI.
   crops of the *same* patch to smooth out noise.
 - **Jitter the intensities.** Add small random brightness/contrast changes to training
   patches (augmentation beyond position).
-- **Augment with rotations and flips.** Beyond the positional random **shifts** we already do
-  (`apply_random_shifts`), add small random **rotations** (a few degrees) and **horizontal
-  mirror flips** of the training patches — standard spatial augmentation that adds pose variety
-  without new data. (We already get a reflection *pair* for free from cropping left **and**
-  right — see §10 — so explicit flips mostly help in combination with rotation and shift.) Keep
-  validation/test **un-augmented** for a clean, deterministic evaluation.
+- **Augment with rotations and flips** — now implemented, as
+  `hippocampus.apply_random_reflections_rotations` (step3), layered on top of the
+  positional random **shifts** (`apply_random_shifts`). Two details differ from the
+  original sketch here: rotations are **exact multiples of 90°**, not a few-degree tilt —
+  step3 crops a larger square first and rotates it losslessly, so nothing is ever resized
+  or interpolated — and **both** horizontal *and* vertical mirror flips are included (each
+  an independent, fixed 25% chance in the code), not just horizontal. None of these three
+  transforms is how a brain is actually scanned — no real acquisition is upside-down or
+  rotated 90° — but that's beside the point: the reason the free left/right reflection pair
+  works (§10) is that the signal we care about, **atrophy**, looks the same reflected, and
+  on a small, tightly-cropped, centred patch like ours, *orientation carries essentially no
+  diagnostic information either way*. That makes all three transforms cheap, standard
+  regularizers for a small dataset, not a compromise on realism — the one real difference
+  from the free L/R pair is mechanism, not validity: L/R comes from cropping two genuinely
+  different anatomical structures, while these three manufacture synthetic transformed
+  copies of the *same* crop, which is exactly how geometric augmentation is meant to work.
+  Whether it empirically helps *this* model either way is worth checking against
+  `internal/lab-notes.md`. Validation/test stay **un-augmented** for a clean, deterministic
+  evaluation, same as they're never shifted.
 - **Train for balanced accuracy, not plain accuracy.** We *report* balanced accuracy (§6) but
   we don't *train* for it: `BCEWithLogitsLoss` counts every patch equally, so whichever class
   contributes more patches pulls the gradient harder — plain accuracy's bias, baked into

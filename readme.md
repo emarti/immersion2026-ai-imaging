@@ -345,6 +345,7 @@ hippocampus:
   apply_random_shifts: true
   random_shift: 3
   n_shifts: 10
+  apply_random_reflections_rotations: true
 ```
 Instead of feeding the whole slice, we crop a small rectangle around each hippocampus.
 There are two (left and right), and we save them as **separate images** — which
@@ -354,7 +355,9 @@ doubles the amount of data.
   **right** box is this one mirrored to the other side automatically. Note we mirror the box
   **location** but do **not** flip the pixels, so the two hippocampi reach the network as
   mirror images of each other — which is fine (a CNN copes with both orientations, and it
-  doubles as free reflection augmentation; see introduction.md §10 for the why).
+  doubles as free reflection augmentation; see introduction.md §10 for the why). This is
+  about the **static** left/right crop-box mirroring only; the three settings below add a
+  *separate*, optional, random augmentation on top of it.
 - **`apply_random_shifts`** — turn **data augmentation** on/off. When `true`, each
   **training** crop is made several times, each nudged by a small random amount — this
   teaches the network to not depend on the exact position. When `false`, the
@@ -370,6 +373,25 @@ doubles the amount of data.
   `(2·4+1)² = 81` possible nudges.
 - **`n_shifts`** — how many of those 81 nudged copies to make per training image
   (10 here). Only used when `apply_random_shifts` is `true`.
+- **`apply_random_reflections_rotations`** — a **second**, independent **training**-only
+  augmentation, applied on top of whatever `apply_random_shifts` already did. When `true`,
+  each training crop is *also* independently flipped left-right (25% chance), flipped
+  top-to-bottom (25% chance, drawn independently of the left-right flip), and rotated by a
+  random multiple of 90°. Those probabilities are fixed in code
+  (`REFLECT_LR_PROB`/`REFLECT_UD_PROB` in `step3-generate-slices.py`), not configurable
+  here. Every saved patch stays exactly `ap` × `lr_left` in size no matter which rotation is
+  drawn — step3 crops a slightly larger square first, rotates it losslessly (no resizing or
+  blurring), then crops back down to size. Validation/test are **never** reflected or
+  rotated, same as they're never shifted.
+  > **None of these three transforms is how a brain is actually scanned** — no real
+  > acquisition is upside-down or rotated 90° — but that's not really the point. The reason
+  > the free left/right pair above works is that **atrophy**, the signal we care about,
+  > looks the same reflected; on a small, tightly-cropped, centred patch like ours,
+  > orientation carries essentially no diagnostic information either way, so flipping or
+  > rotating it is a cheap, standard regularizer for a small dataset (same spirit as
+  > dropout, §9 of introduction.md), not a compromise on realism. Whether it empirically
+  > helps *this* model is still worth checking; see
+  > [lab-notes.md](internal/lab-notes.md) for what running with this on actually showed.
 
 ### 5.5 Splits — *how to divide the subjects*
 ```yaml

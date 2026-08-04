@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Run the whole OASIS pipeline end to end:
-#   metadata -> cohort -> slices -> train the four CNN designs -> compare -> Grad-CAM.
+#   metadata -> cohort -> slices -> train the CNN -> plot -> Grad-CAM -> predictor ablation.
 #
 # Activate the environment first so `python` is the oasis interpreter:
 #     mamba activate oasis
@@ -10,6 +10,9 @@
 # The number of training epochs is set in config.yaml (`epochs`). Override the Python
 # interpreter with an env var if needed:
 #     PYTHON=/path/to/python ./process.sh
+#
+# Steps 5 and 7 never touch TEST here -- that needs the deliberate, one-time `--reveal`
+# flag (see their own docstrings), which this script does not pass.
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -25,16 +28,17 @@ echo "== Step 3: generate slices =="
 rm -rf outputs/train outputs/validate outputs/test   # drop stale slices from prior offsets
 $PYTHON step3-generate-slices.py
 
-echo "== Step 4: train the four CNN designs (epochs from config.yaml) =="
-for design in a b c d; do
-    echo "-- step4${design} --"
-    $PYTHON "step4${design}-train-network.py"
-done
+echo "== Step 4: train the CNN (epochs from config.yaml) =="
+$PYTHON step4-train-network.py
 
-echo "== Step 5: plot the comparison =="
+echo "== Step 5: plot the training curves =="
 $PYTHON step5-plot-training.py
 
-echo "== Step 6: Grad-CAM heatmaps (baseline design 4a) =="
+echo "== Step 6: Grad-CAM heatmaps =="
 $PYTHON step6-gradcam.py
 
-echo "== Done. See outputs/training_comparison.png, gradcam_grid.png, and gradcam_context/ =="
+echo "== Step 7: age/nWBV/CNN predictor ablation =="
+$PYTHON step7-stack-predictors.py
+
+echo "== Done. See outputs/step5-training_comparison.png, step6-gradcam_grid.png, "
+echo "   gradcam_context/, and outputs/step7-stacking_summary.txt =="
