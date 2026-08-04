@@ -13,11 +13,11 @@ nibabel          # reads Analyze 7.5 (.img/.hdr) volumes
 openpyxl         # step1 validates metadata.csv against docs/oasis_cross-sectional.xlsx
 pandas           # optional convenience for the network step (manifest is YAML, loaded via pyyaml)
 
-# --- step 4 (network) ---
+# --- steps 4-5 (network + reporting) ---
 torch
 torchvision
-matplotlib       # step5 plots the step4 training logs (outputs/training_comparison.png)
+matplotlib       # step5 plots the step4 training logs (outputs/step5-training_comparison.png)
+scikit-learn     # roc_auc_score, used for validation AUC in step4 (and by the notebooks)
 
 # --- jupyter/ notebooks (optional; not needed to run steps 1-6) ---
 ipykernel        # lets VS Code / Jupyter run a notebook against this environment
-scikit-learn     # jupyter/nWBV.ipynb: LogisticRegression + roc_auc_score

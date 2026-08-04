@@ -199,7 +199,7 @@ def main() -> None:
         split: pick_context_subjects(splits.get(split, []) or [], context_samples, seed + i)
         for i, split in enumerate(SPLITS)
     }
-    context_dir = os.path.join(config["outputs_path"], "slice_context")
+    context_dir = os.path.join(config["outputs_path"], "step3-slice_context")
     ctx_count = 0
 
     manifest_path = manifest_yaml(config)

@@ -20,7 +20,7 @@ original Torch implementation https://github.com/ramprs/grad-cam and the PyTorch
 backward-hook approach discussed at
 https://discuss.pytorch.org/t/grad-cam-implementation-in-pytorch-backward-on-model/3554/7
 
-This step writes two views: (1) a montage ``gradcam_grid.png`` (plus per-patch overlays in
+This step writes two views: (1) a montage ``step6-gradcam_grid.png`` (plus per-patch overlays in
 ``outputs/gradcam/``) over a sample of patches; and (2) per-subject **whole-slice context**
 overlays in ``outputs/gradcam_context/`` -- the same heatmaps drawn back onto the full axial
 slice at the left/right hippocampus crop boxes. The context pass reloads the raw volume, so
@@ -222,7 +222,7 @@ def main():
         raise SystemExit(f"No patches for split '{split}' in the manifest.")
     rows = pick_rows(split_rows, n, seed)
 
-    out_dir = os.path.join(outputs_path, "gradcam")
+    out_dir = os.path.join(outputs_path, "step6-gradcam")
     os.makedirs(out_dir, exist_ok=True)
 
     panels = []                              # (gray, cam_neg, cam_pos, title, colour)
@@ -263,7 +263,7 @@ def main():
                  f"left/blue = pushes toward {name_neg}    ·    right/red = pushes toward {name_pos}",
                  fontsize=10)
     fig.tight_layout()
-    grid_path = os.path.join(outputs_path, "gradcam_grid.png")
+    grid_path = os.path.join(outputs_path, "step6-gradcam_grid.png")
     fig.savefig(grid_path, dpi=120)
     plt.close(fig)
 
@@ -280,7 +280,7 @@ def main():
     l0, l1 = hcfg["lr_left"]
     data_raw = config["data_raw_path"]
 
-    ctx_dir = os.path.join(outputs_path, "gradcam_context")
+    ctx_dir = os.path.join(outputs_path, "step6-gradcam_context")
     os.makedirs(ctx_dir, exist_ok=True)
 
     subjects = {}                       # one entry per subject (L/R share img/slice/label)

@@ -240,13 +240,58 @@ responses while making the network cheaper and less sensitive to the exact posit
 a feature. So an image flows through a CNN getting **smaller in space but richer in
 channels**, e.g. `1 → 32 → 64 → 128` channels while the grid halves at each step.
 
-### 4.5 Two small helpers: ReLU and BatchNorm
+### 4.5 Activation functions (and BatchNorm)
 
-- **ReLU** ("rectified linear unit") is the activation step: it replaces every negative
-  number with 0 and keeps positives unchanged (`ReLU(-3)=0`, `ReLU(5)=5`). Without a
-  step like this the whole network would not be able to represent complex patterns.
-- **BatchNorm** rescales the numbers flowing between layers so they stay in a sane range
-  (roughly mean 0, spread 1). It mainly makes training faster and more stable.
+Between every pair of layers sits a tiny, almost trivial-looking operation called an
+**activation function**. It is the least impressive-looking part of a network and the one
+without which none of the rest works.
+
+**Why any network needs one.** A convolution, and an ordinary neuron layer, are both *linear*:
+each output is a weighted sum of its inputs. And here is the problem with stacking linear
+things — do one, then another, and the pair is **still linear**. In matrix terms, if the first
+layer computes `A·x` and the second computes `B·(A·x)`, that equals `(B·A)·x`, and `B·A` is
+just another matrix. A hundred stacked linear layers can express *exactly* what one layer can.
+All that depth would buy you nothing at all.
+
+> **Key idea.** The activation function is what makes depth mean something. Put a nonlinear
+> step between the layers and the combination can no longer be collapsed into one — so each
+> extra block genuinely adds descriptive power, letting the network build "edge → texture →
+> shape" instead of one flat weighted sum of pixels.
+
+**ReLU** ("rectified linear unit") is our example, and the modern default: it replaces every
+negative number with 0 and leaves positives alone.
+
+```
+ReLU(x) = max(0, x)          ReLU(-3) = 0     ReLU(5) = 5
+```
+
+That is the whole function. Two properties earned it its place:
+
+- **It is almost free.** One comparison per number — no exponentials, no division. On millions
+  of activations per image that matters.
+- **Its slope is exactly 0 or 1.** When gradients travel back through the network during
+  training (§5), passing through a ReLU either stops them or leaves them untouched — it never
+  *shrinks* them.
+
+That second point is worth dwelling on, because it is why ReLU replaced what came before. The
+older choice was a smooth S-shaped function like the sigmoid, whose slope flattens to nearly
+zero at both ends. Every layer a gradient passes back through multiplies it by another small
+number, so in a deep network the early layers receive almost nothing and barely learn — the
+**vanishing-gradient problem**. ReLU's flat-1 slope simply does not do that.
+
+ReLU has one failure of its own, with a memorable name. If a unit's output lands at 0 for
+*every* training image, its slope there is also 0, so no gradient ever reaches it and it can
+never recover — a **dying ReLU**. That is what **LeakyReLU** fixes, by giving the negative side
+a small nonzero slope instead of a hard zero; **GELU** is a smooth modern alternative. §14
+invites you to swap one in and see whether training gets steadier.
+
+> **Don't confuse this with the sigmoid at the end.** §4.6 passes the network's single final
+> output through a sigmoid to turn it into a probability. That is a different job, done once,
+> to make the answer readable. Activation functions run *between* layers, on every number, to
+> keep the network from collapsing into a linear model.
+
+**BatchNorm**, finally, rescales the numbers flowing between layers so they stay in a sane
+range (roughly mean 0, spread 1). It mainly makes training faster and more stable.
 
 ### 4.6 From a grid to a decision: GAP, the head, and the logit
 
@@ -298,8 +343,52 @@ We have a network full of random weights making random guesses. How does it impr
 
 1. **Loss — measuring wrongness.** A **loss function** scores how far the guesses are
    from the truth (lower = better). For a yes/no question the standard is
-   **binary cross-entropy** (`BCEWithLogitsLoss` in the code). Intuitively it punishes
-   confident wrong answers a lot and correct confident answers a little.
+   **binary cross-entropy**. For one patch, with true label y (either 0 or 1) and predicted
+   probability p (the network's answer, between 0 and 1):
+
+   ```
+   L = −[ y·log(p) + (1−y)·log(1−p) ]
+   ```
+
+   It looks worse than it is, because **only one of the two terms is ever alive**. If the true
+   answer is CDR-positive (y = 1) the second term is multiplied by zero and the whole thing is
+   just `L = −log(p)`. If the true answer is CDR-negative (y = 0) the first term vanishes and
+   it is `L = −log(1−p)`. One formula, two mirror-image cases.
+
+   Put numbers through the y = 1 case and the shape of the punishment appears:
+
+   | the model says | loss `−log(p)` |
+   |---|---|
+   | p = 0.9 (confident, right) | 0.105 |
+   | p = 0.5 (no idea) | **0.693** |
+   | p = 0.1 (confident, wrong) | 2.303 |
+
+   Confident-and-wrong costs **about twenty times** the loss of confident-and-right (2.303 vs
+   0.105), while the gap between "right" and "no idea" is far smaller. That asymmetry is the
+   point: the loss is much more interested in stamping out confident mistakes than in rewarding
+   confident successes.
+
+   > **The 0.693 anchor.** A model that answers "50/50, no idea" to everything scores
+   > `−log(0.5) = 0.693` on every single patch. That is why the training curves in
+   > `outputs/step5-training_comparison.png` all *start* near 0.69 — it is the score of knowing
+   > nothing, and the number every design has to beat. A loss that sits at 0.693 and refuses to
+   > move means the network is learning nothing at all.
+
+   **Why the code says `BCEWithLogitsLoss`.** Look at §4.6 again: the network's last layer
+   emits a raw **logit**, and `forward` never applies a sigmoid. That looks like an omission,
+   and it isn't — `BCEWithLogitsLoss` does the sigmoid *and* the formula above in one fused
+   step, for **numerical stability**. Done separately, a strongly negative logit gives a p that
+   rounds to exactly 0 in the computer's arithmetic, and then `log(0)` is −∞, and the loss
+   becomes `NaN` and training dies on the spot. The fused version rearranges the algebra so
+   nothing ever overflows. (For the curious, the form PyTorch actually evaluates is
+   `L = max(z,0) − z·y + log(1 + e^−|z|)` for logit z — mathematically identical, numerically
+   safe.)
+
+   The loss can also be **weighted**: `BCEWithLogitsLoss(pos_weight=w)` multiplies the y = 1
+   term by w, so that setting w = (number of negatives)/(number of positives) makes each
+   *class* contribute equally rather than each *patch*. That is the training-time analogue of
+   balanced accuracy, and it is what lets you train on an unbalanced cohort without the model
+   simply learning to answer with whichever class is commoner — see §14.
 
 2. **Gradient descent — rolling downhill.** For each weight, calculus tells us which
    direction (up or down) would *reduce* the loss, and by how much (the **gradient**).
@@ -310,7 +399,37 @@ We have a network full of random weights making random guesses. How does it impr
    > small step that way. Repeat thousands of times and they descend. The network is the
    > hiker; the loss is the height; the gradient is the slope under its feet.
 
-3. **Learning rate — how big a step.** The **learning rate** (we use `1e-4` = 0.0001) is
+3. **Backpropagation — how the slope is actually found.** Gradient descent needs one number
+   per weight, and our smallest design has ~8,000 of them (the widest, ~102,000). You could
+   imagine finding them by brute force — nudge one weight, re-run the whole network, see
+   whether the loss moved, put it back, repeat — but that is one full pass per weight, per
+   step. Hopeless.
+
+   **Backpropagation** is the bookkeeping that gets all of them in a single sweep. It starts at
+   the loss and works *backwards* through the layers, and because each layer is a simple
+   operation whose slope is known, it can hand each layer's share of the blame to the one
+   before it. One forward pass, one backward pass, every gradient. It is the reason training
+   deep networks is possible at all.
+
+   **But it is not a solver, and it does not guarantee a good model.** Four honest caveats,
+   all visible in this project:
+
+   - **It is local.** Our hiker feels only the ground directly underfoot. A deeper valley on
+     the far side of the hill is invisible, and they may settle contentedly in a shallow dip.
+     Nothing in the method can tell the difference.
+   - **It feels a noisy floor.** Each step's slope is measured from one *batch* of 32 patches,
+     not the whole training set, so the direction wobbles. This is usually helpful — the
+     jitter can shake the hiker out of a shallow dip — but it means the path is never smooth.
+   - **Where it lands depends on where it started**, and on the order the batches arrived in.
+     That is precisely why two runs of the same design need not agree, and why `seed` exists in
+     `config.yaml`.
+   - **It optimizes the wrong thing, slightly.** Backprop faithfully minimizes the *training*
+     loss. What we actually want is good performance on people the model has never seen, judged
+     by balanced accuracy. Those are three different targets, and the gap between them is where
+     overfitting (§7) lives. A network can drive its training loss beautifully to zero and be
+     useless — you will see exactly that in design 4b.
+
+4. **Learning rate — how big a step.** The **learning rate** (we use `1e-4` = 0.0001) is
    the size of each step. Too **big** and the hiker overshoots the valley and bounces
    around; too **small** and they crawl and it takes forever. Getting it right matters a
    lot (see §10).
@@ -363,6 +482,47 @@ Why balanced accuracy is fair: the always-say-CDR-negative model has sensitivity
 specificity 1, so its balanced accuracy is (0 + 1)/2 = **0.5** — exactly "no better than
 a coin flip," as it should be.
 
+### The other two: PPV and NPV
+
+Sensitivity and specificity read the table **by row** — start from the truth, ask how often the
+model got it. But a clinician holding a result in their hand has the opposite question: *given
+that this came back positive, what are the chances it's real?* That reads the table **by
+column**, and gives two more numbers:
+
+- **PPV** (positive predictive value, also called **precision**) = TP / (TP + FP) = 12/15 =
+  **0.80** — of everyone we flagged, how many really were CDR-positive?
+- **NPV** (negative predictive value) = TN / (TN + FN) = 17/25 = **0.68** — of everyone we
+  cleared, how many really were CDR-negative?
+
+These are the numbers that decide whether a test is *useful*, and they behave very differently
+from the first two:
+
+> **Key idea.** Sensitivity and specificity are properties of the **test**. PPV and NPV are
+> properties of the test **and the population you apply it to**. The same model, unchanged, has
+> a different PPV in a memory clinic than in a shopping centre.
+
+That is not a technicality — it is the single most common way medical test results are
+misread. Take a genuinely good test, sensitivity **0.90** and specificity **0.90**, and apply it
+to 10,000 people in a population where **1 %** truly have the condition:
+
+```
+                    predicted +    predicted −
+truly +    (100)         90             10
+truly −  (9,900)        990          8,910
+```
+
+PPV = 90 / (90 + 990) = **0.083**. A 90/90 test, and **fewer than one positive result in twelve
+is real.** Nothing is wrong with the test. There are simply 99 negatives for every positive, so
+even a small false-positive *rate* produces far more false alarms than true ones. Sensitivity
+and specificity did not change at all; only the base rate did.
+
+**What this means for our numbers.** Our validation split is **50/50 by construction** — we
+balanced it deliberately so that chance sits at 0.50 and accuracy is readable. That also means
+any PPV we compute here is far rosier than the same model would manage in a real clinic, where
+CDR-positive prevalence is much lower. It is a genuine limitation of what this pipeline reports,
+not a hypothetical one, and it is why we headline balanced accuracy and AUC — both of which are
+unaffected by the class mix — rather than PPV.
+
 > **Key idea.** We keep our groups **50/50 CDR-negative/CDR-positive**, so chance is **0.50**
 > and plain accuracy already equals balanced accuracy. We still log **sensitivity** and
 > **specificity** because they reveal *which way* a model leans (does it miss impaired
@@ -372,12 +532,44 @@ One caveat sits underneath all four numbers: they measure **agreement with the l
 label is a clinician's rating, not a ground truth (§1). A "false positive" may be a case where
 the model saw something real and the rating didn't, and we have no way here to tell those apart.
 
-All of these judge the model at a single **0.5 threshold**; a threshold-free alternative,
-**AUC** (area under the ROC curve), summarizes performance across *all* thresholds — a natural
-extension of the plots (see §14).
+### AUC — the number that doesn't need a threshold
 
-The step4 scripts print all four every epoch and save them to a CSV; step5 also reports
-each design's average over the last 20 epochs.
+Every metric so far judges the model at one **0.5 cutoff**. But that cutoff is a choice, not a
+law: move it down and you catch more CDR-positive patches at the cost of more false alarms;
+move it up and the reverse. A model is really a whole *family* of tests, one per threshold, and
+picking one to report throws the rest away.
+
+The **ROC curve** shows them all at once. Sweep the threshold from one extreme to the other and
+plot, at each setting, the false positive rate (x) against the sensitivity (y). At the far
+bottom-left the model calls everything CDR-negative — no false alarms, no catches. At the far
+top-right it calls everything CDR-positive — every catch, every false alarm. In between it
+traces a curve, and a model that ranks well bulges toward the **top-left corner**: lots of
+sensitivity while the false alarms are still low. `step5-plot-training.py` draws exactly this,
+all four designs overlaid, in `outputs/step5-roc_curve.png`.
+
+**AUC** is the area under that curve, and it has a plain-English meaning worth memorising:
+
+> **Key idea.** AUC = **the chance that a randomly chosen CDR-positive patch scores higher than
+> a randomly chosen CDR-negative one.** 0.5 is a coin flip (the diagonal); 1.0 is perfect
+> separation. It asks only whether the model *ranks* the two groups correctly — never where you
+> draw the line.
+
+Two consequences make it the metric we lean on. Because it depends only on ranking, it is
+unchanged by the class mix, so it is the fair way to compare our CNN against a different model
+— or against a baseline that uses no image at all, like the age-only and brain-volume
+predictors in `jupyter/` (§10). And it is mathematically the same quantity as the **Mann-Whitney
+U** statistic, so the number you report doubles as a nonparametric test of whether the two
+groups differ at all.
+
+**One warning, for when your classes are not balanced.** ROC-AUC can stay flattering on badly
+imbalanced data, because the false-positive rate divides by a very large number of negatives —
+in the 1 %-prevalence example above, those 990 false alarms are only a 10 % false-positive rate,
+so the curve still looks respectable while the PPV is 0.083. When positives are rare and you
+care about precision, the honest alternative is the **precision-recall curve** and its area
+(**PR-AUC**), which has no such blind spot. §14 has it as an experiment to try.
+
+The step4 scripts print all five metrics every epoch and save them to a CSV; step5 plots them
+and reports each design's average over the last `avg_last_epochs` epochs.
 
 ---
 
@@ -538,7 +730,7 @@ makes the network waste effort on irrelevant tissue and black border. Cropping a
 box focuses it on the disease-relevant region. We crop **both** hippocampi and save them
 as **separate examples**, which **doubles** the training data for free. To *see* how big
 the box is and where it lands, step 3 writes **context images** to
-`outputs/slice_context/` for a few subjects — the full axial slice with a rectangle around
+`outputs/step3-slice_context/` for a few subjects — the full axial slice with a rectangle around
 each crop window (train shows all the random-shift boxes; val/test the single box). If the
 boxes look too large or off-centre, that's your cue to tighten `hippocampus.ap` /
 `lr_left`.
@@ -732,8 +924,8 @@ pixel. Treat it as a sanity check ("is attention on the hippocampus?"), not a se
 
 `step6-gradcam.py` loads a trained checkpoint (`model_4a.pt`, saved by step 4), runs a
 sample of patches, and writes **two-panel** overlays (CDR− | CDR+, in two distinct
-colormaps) to `outputs/gradcam/` plus a montage. It also redraws each subject's L/R heatmaps back onto the
-full axial slice as a CDR−-vs-CDR+ pair (`outputs/gradcam_context/`), so you can see
+colormaps) to `outputs/step6-gradcam/` plus a montage. It also redraws each subject's L/R heatmaps back onto the
+full axial slice as a CDR−-vs-CDR+ pair (`outputs/step6-gradcam_context/`), so you can see
 where in the brain each kind of evidence sits.
 **Method:** Selvaraju et al., *"Grad-CAM: Visual Explanations from Deep Networks via
 Gradient-based Localization"* (ICCV 2017); our implementation is inspired by (not copied
@@ -880,13 +1072,16 @@ regression on brain size, etc. is a competitive or even better than AI.
   and specificity, or you will fool yourself exactly as the "always CDR-negative" model does.
 - **Change the objective entirely.** Predict the **CDR grade** itself (ordinal / multi-class)
   rather than pooling severities, or regress the **MMSE** score instead of a single yes/no.
-- **Report AUC, not just sens/spec.** Add **ROC-AUC** (area under the ROC curve; optionally
-  PR-AUC) to step5's printout and plots — a single **threshold-free** summary of how well the
-  model *ranks* CDR-positive above CDR-negative, complementing the fixed-0.5-threshold
-  sensitivity / specificity / balanced accuracy. The one prerequisite: AUC needs the model's
-  **continuous scores** (probabilities), so step4 would log the per-epoch validation
-  probabilities (or step5 would recompute them from a saved checkpoint) rather than only the
-  thresholded metrics it logs today.
+- **Report AUC, not just sens/spec** — *now implemented*. Each step4 design logs a per-epoch
+  `val_auc`, and step5 plots it and puts it in the summary table. AUC is **threshold-free**: it
+  measures how well the model *ranks* CDR-positive above CDR-negative, rather than how it does
+  at the one 0.5 cutoff the other metrics use. It needs the model's **continuous** output, so
+  `evaluate()` keeps the raw logits and hands them to `roc_auc_score` — the ranking is all that
+  matters, so no sigmoid is required. step5 also draws the **ROC curve itself**
+  (`outputs/step5-roc_curve.png`), all four designs overlaid, so you can see *where* along the
+  threshold sweep one design overtakes another rather than only comparing the areas. Still open
+  if you want to go further: **PR-AUC**, which is better behaved than ROC-AUC when the classes
+  are badly unbalanced — worth trying if you ever set `cohort.balance: none`.
 - **Tune the training loop.** A cosine learning-rate schedule with warmup, or a different
   batch size, can matter as much as the architecture.
 - **Ensemble the four designs.** Average 4a–4d's predictions — ensembles usually beat any
@@ -980,6 +1175,23 @@ is, alongside other background reading, grouped by topic.
 - [EECS 498-007 / 598-005: Deep Learning for Computer Vision](https://web.eecs.umich.edu/~justincj/teaching/eecs498/WI2022/)
   (Justin Johnson, University of Michigan), with
   [community lecture notes](https://github.com/Andrew-Ng-s-number-one-fan/EECS498-Deep-Learning-for-Computer-Vision).
+
+**Visual intuition — 3Blue1Brown**
+
+Short, beautifully animated videos. If any part of §4, §5 or §6 refuses to click, try these
+before re-reading — for a lot of people they are the moment it lands.
+
+- ["But what is a Neural Network?"](https://www.3blue1brown.com/lessons/neural-networks) —
+  chapter 1 of the neural-networks series, and the clearest visual account of §4 anywhere. The
+  chapters that follow it cover gradient descent and backpropagation, i.e. §5, and are worth
+  watching in order.
+- ["But what is Cross-Entropy?"](https://www.3blue1brown.com/lessons/cross-entropy) — the loss
+  function §5 works through, approached from a different direction (what it costs to be
+  confidently wrong). Good if the equation felt arbitrary.
+- ["The medical test paradox"](https://www.3blue1brown.com/lessons/better-bayes) — base rates,
+  and why a positive result from a genuinely good test so often isn't what it looks like. This
+  is the video version of §6's PPV example, and it is the single most useful thing on this list
+  for anyone who will read clinical results.
 
 **Classic papers**
 

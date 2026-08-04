@@ -11,7 +11,7 @@ ReLU -> MaxPool(2), then global average pooling and a small 2-layer classifier. 
 output (CDR-positive=1 vs CDR-negative=0) trained with BCEWithLogitsLoss + AdamW.
 
 Each epoch trains on the training split and evaluates on the validation split;
-per-epoch train/val loss and accuracy are written to
+per-epoch train/val loss, accuracy and validation AUC are written to
 ``outputs/training_log_4d.csv``, and the final weights to ``outputs/model_4d.pt``
 (step6 reads them for Grad-CAM). step5 overlays the CSVs from all designs (4a-4d).
 
@@ -33,6 +33,7 @@ import torch.optim as optim
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
+from sklearn.metrics import roc_auc_score
 
 from common import load_config, load_yaml, manifest_yaml
 
@@ -111,19 +112,23 @@ GRADES = (0.5, 1.0, 2.0)   # CDR-positive severities pooled under label 1
 
 
 def evaluate(model, device, loader):
-    """Evaluate (no training); return loss, accuracy, sensitivity, specificity, and
+    """Evaluate (no training); return loss, accuracy, sensitivity, specificity, AUC, and
     a per-CDR-grade accuracy dict for the CDR-positive grades 0.5 / 1 / 2.
 
     Positive class = CDR-positive (label 1). sensitivity = TP/(TP+FN) (recall of
-    CDR-positive), specificity = TN/(TN+FP) (recall of CDR-negative). Per-grade accuracy is
-    the recall within that grade (all its patches are label 1); nan if the grade has
-    no patches in this split.
+    CDR-positive), specificity = TN/(TN+FP) (recall of CDR-negative). AUC is the area under
+    the ROC curve -- the chance that a randomly chosen CDR-positive patch scores above a
+    randomly chosen CDR-negative one -- and unlike the three above it does NOT depend on the
+    0.5 threshold. Per-grade accuracy is the recall within that grade (all its patches are
+    label 1); nan if the grade has no patches in this split.
     """
     model.eval()
     loss_sum = 0.0
     tp = tn = fp = fn = 0
     g_correct = {g: 0 for g in GRADES}
     g_total = {g: 0 for g in GRADES}
+    all_logits = []        # kept for AUC, which needs the continuous score, not the 0/1 call
+    all_targets = []
     with torch.no_grad():
         for data, target, cdr in loader:
             data, target = data.to(device), target.to(device)
@@ -140,13 +145,21 @@ def evaluate(model, device, loader):
                 mask = cdr == g
                 g_total[g] += int(mask.sum())
                 g_correct[g] += int((correct & mask).sum())
+            all_logits.append(output.cpu())
+            all_targets.append(target.cpu())
     n = len(loader.dataset)
     acc = (tp + tn) / n
     sens = tp / (tp + fn) if (tp + fn) else 0.0
     spec = tn / (tn + fp) if (tn + fp) else 0.0
+    # AUC is rank-based, so the raw logits work directly -- passing them through a sigmoid
+    # first would not change the ordering, and skipping it avoids float32 saturation turning
+    # very confident logits into exact ties. Undefined if a split holds only one class.
+    targets = torch.cat(all_targets).numpy()
+    logits = torch.cat(all_logits).numpy()
+    auc = roc_auc_score(targets, logits) if len(set(targets.tolist())) == 2 else float("nan")
     grade_acc = {g: (g_correct[g] / g_total[g] if g_total[g] else float("nan"))
                  for g in GRADES}
-    return loss_sum / n, acc, sens, spec, grade_acc
+    return loss_sum / n, acc, sens, spec, auc, grade_acc
 
 
 def main():
@@ -195,11 +208,12 @@ def main():
                             weight_decay=args.weight_decay)
 
     history = {k: [] for k in ("train_loss", "train_acc", "val_loss", "val_acc",
-                               "val_sens", "val_spec", "val_bal",
+                               "val_sens", "val_spec", "val_bal", "val_auc",
                                "val_cdr05", "val_cdr10", "val_cdr20")}
     for epoch in range(1, epochs + 1):
         tr_loss, tr_acc = train(model, device, train_loader, optimizer)
-        va_loss, va_acc, va_sens, va_spec, va_grade = evaluate(model, device, val_loader)
+        va_loss, va_acc, va_sens, va_spec, va_auc, va_grade = evaluate(
+            model, device, val_loader)
         va_bal = (va_sens + va_spec) / 2
         history["train_loss"].append(tr_loss)
         history["train_acc"].append(tr_acc)
@@ -208,25 +222,26 @@ def main():
         history["val_sens"].append(va_sens)
         history["val_spec"].append(va_spec)
         history["val_bal"].append(va_bal)
+        history["val_auc"].append(va_auc)
         history["val_cdr05"].append(va_grade[0.5])
         history["val_cdr10"].append(va_grade[1.0])
         history["val_cdr20"].append(va_grade[2.0])
         print(f"Epoch {epoch:3d}/{epochs}   "
               f"train loss {tr_loss:.4f} acc {tr_acc:.3f}   "
               f"val loss {va_loss:.4f} acc {va_acc:.3f} "
-              f"sens {va_sens:.3f} spec {va_spec:.3f} bal {va_bal:.3f}")
+              f"sens {va_sens:.3f} spec {va_spec:.3f} bal {va_bal:.3f} auc {va_auc:.3f}")
 
     # Save the per-epoch numbers as a text file (CSV); step5 plots it.
     log_path = os.path.join(outputs_path, CSV_NAME)
     with open(log_path, "w") as f:
         f.write("epoch,train_loss,train_acc,val_loss,val_acc,val_sens,val_spec,val_bal_acc,"
-                "val_acc_cdr05,val_acc_cdr10,val_acc_cdr20\n")
+                "val_auc,val_acc_cdr05,val_acc_cdr10,val_acc_cdr20\n")
         for epoch in range(1, epochs + 1):
             i = epoch - 1
             f.write(f"{epoch},{history['train_loss'][i]:.6f},{history['train_acc'][i]:.6f},"
                     f"{history['val_loss'][i]:.6f},{history['val_acc'][i]:.6f},"
                     f"{history['val_sens'][i]:.6f},{history['val_spec'][i]:.6f},"
-                    f"{history['val_bal'][i]:.6f},"
+                    f"{history['val_bal'][i]:.6f},{history['val_auc'][i]:.6f},"
                     f"{history['val_cdr05'][i]:.6f},{history['val_cdr10'][i]:.6f},"
                     f"{history['val_cdr20'][i]:.6f}\n")
     print(f"Saved training log -> {log_path}")

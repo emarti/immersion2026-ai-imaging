@@ -84,9 +84,9 @@ students never have to `cd` anywhere. Scripts run in numeric order:
 | `step2-assign-groups.py` | cohort selection + subject-level splits | `outputs/splits.yaml` |
 | `step3-generate-slices.py` | hippocampus patch PNGs + crop-box context images | `outputs/<split>/`, `manifest.yaml` |
 | `step4a`–`4d-train-network.py` | four CNN designs (baseline + 3 single-change variants) | `outputs/training_log_4?.csv`, `model_4?.pt` |
-| `step5-plot-training.py` | comparison plot + text summary | `outputs/training_comparison.png` |
+| `step5-plot-training.py` | comparison plot + text summary | `outputs/step5-training_comparison.png` |
 | `step6-gradcam.py` | Grad-CAM heatmaps | `outputs/gradcam*/` |
-| `step7-perturb.py` | perturbation saliency — **standalone** | `outputs/perturb/` |
+| `step7-perturb.py` | perturbation saliency — **standalone** | `outputs/step7-perturb/` |
 
 `process.sh` runs steps 1–6. **Step 7 is intentionally excluded** from `process.sh`,
 `config.yaml`, and the reader-facing docs — it's an optional extra. Keep it that way unless

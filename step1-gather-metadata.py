@@ -4,7 +4,7 @@
 Walks every ``disc*/OAS1_XXXX_MRy/OAS1_XXXX_MRy.txt`` under the configured data
 root, parses age / sex / CDR (and MMSE for reference), locates the matching
 brain-masked atlas volume, derives the binary dementia label, and writes a
-tidy ``metadata.csv``. It also saves ``outputs/dataset_age_histograms.png`` -- CDR-negative
+tidy ``metadata.csv``. It also saves ``outputs/step1-dataset_age_histograms.png`` -- CDR-negative
 vs CDR-positive counts by age over the *entire* dataset (step2 makes the same plot restricted
 to the cohort's age range).
 
@@ -283,31 +283,41 @@ def plot_age_histograms(rows: list[dict], out_path: str, labels_cfg: dict) -> No
 
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4.6), sharex=True)
 
+    # EVERY panel draws STACKED, filled regions: each bar's full height is the number of
+    # subjects in that age bin, divided into coloured segments. Stacking rather than drawing
+    # the groups on top of one another means no group can hide behind another, and all three
+    # panels are read the same way -- total height first, then the split within it.
+    def stacked_fill(ax, cats, alpha=0.6):
+        """``cats``: list of (ages_array, colour, legend_label)."""
+        cats = [c for c in cats if len(c[0])]
+        if not cats:
+            return
+        ax.hist([c[0] for c in cats], bins=edges, histtype="stepfilled", stacked=True,
+                alpha=alpha, color=[c[1] for c in cats], label=[c[2] for c in cats])
+
     # (1) both sexes pooled
-    ax1.hist(ages[labels == 0], bins=edges, histtype="stepfilled", alpha=0.55,
-             color=C_NEG, label=neg_name)
-    ax1.hist(ages[labels == 1], bins=edges, histtype="stepfilled", alpha=0.55,
-             color=C_POS, label=pos_name)
+    cats1 = [(ages[labels == 0], C_NEG, neg_name), (ages[labels == 1], C_POS, pos_name)]
+    stacked_fill(ax1, cats1, alpha=0.55)
     ax1.set(title="CDR status vs age (both sexes)", xlabel="age (years)", ylabel="subjects")
     ax1.legend(fontsize=8)
 
-    # (2) sexes separated (colour = CDR, solid = Male / dashed = Female)
-    for lbl, colour, name in ((0, C_NEG, neg_name), (1, C_POS, pos_name)):
-        for sex, ls, sname in (("M", "-", "Male"), ("F", "--", "Female")):
-            m = (labels == lbl) & (sexes == sex)
-            if m.any():
-                ax2.hist(ages[m], bins=edges, histtype="step", linewidth=1.6,
-                         color=colour, linestyle=ls, label=f"{name} · {sname}")
+    # (2) sexes separated -- colour FAMILY = sex (Male green, Female purple; different hues
+    # from panels 1/3 so they don't clash with the CDR-status colouring), SHADE = CDR
+    # status (dark = CDR+, light = CDR-).
+    MALE_LIGHT, MALE_DARK = "palegreen", "darkgreen"
+    FEMALE_LIGHT, FEMALE_DARK = "plum", "indigo"
+    cats2 = [(ages[(labels == lbl) & (sexes == sex)], colour, f"{sname} · {name}")
+             for sex, (c_neg, c_pos), sname in (("M", (MALE_LIGHT, MALE_DARK), "Male"),
+                                                ("F", (FEMALE_LIGHT, FEMALE_DARK), "Female"))
+             for lbl, colour, name in ((0, c_neg, neg_name), (1, c_pos, pos_name))]
+    stacked_fill(ax2, cats2)
     ax2.set(title="CDR status vs age (sexes separated)", xlabel="age (years)")
     ax2.legend(fontsize=7)
 
-    # (3) raw CDR grade separated (both sexes pooled)
+    # (3) raw CDR grade separated (both sexes pooled) -- each grade already has its own colour.
     grade_colours = {0.0: "steelblue", 0.5: "gold", 1.0: "darkorange", 2.0: "crimson"}
-    for g in (0.0, 0.5, 1.0, 2.0):
-        m = cdrs == g
-        if m.any():
-            ax3.hist(ages[m], bins=edges, histtype="step", linewidth=1.8,
-                     color=grade_colours[g], label=f"CDR {g:g}")
+    cats3 = [(ages[cdrs == g], grade_colours[g], f"CDR {g:g}") for g in (0.0, 0.5, 1.0, 2.0)]
+    stacked_fill(ax3, cats3, alpha=0.7)
     ax3.set(title="CDR grade vs age (both sexes)", xlabel="age (years)")
     ax3.legend(fontsize=8)
 
@@ -340,7 +350,7 @@ def main() -> None:
 
     outputs_path = config["outputs_path"]
     os.makedirs(outputs_path, exist_ok=True)
-    plot_age_histograms(rows, os.path.join(outputs_path, "dataset_age_histograms.png"),
+    plot_age_histograms(rows, os.path.join(outputs_path, "step1-dataset_age_histograms.png"),
                         config.get("labels") or {})
 
     if not args.skip_validate:

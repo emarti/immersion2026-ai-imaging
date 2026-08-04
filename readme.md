@@ -239,12 +239,12 @@ The table below is what each step does and produces:
 
 | Step | Script | What it does | Produces |
 |---|---|---|---|
-| 1 | `step1-gather-metadata.py` | Reads every session's `.txt`, works out age/sex/label, finds the image file, cross-checks against the official OASIS spreadsheet, and plots the age distribution by CDR status for the **whole dataset**. | `outputs/metadata.csv` + `outputs/dataset_age_histograms.png` |
-| 2 | `step2-assign-groups.py` | Chooses the study **cohort** (which subjects to use) and splits them into **train / validate / test** groups; also plots the cohort's age distribution by CDR status. | `outputs/splits.yaml` + `outputs/cohort_age_histograms.png` |
-| 3 | `step3-generate-slices.py` | For each chosen subject, cuts 2-D **hippocampus patches** (left and right) out of the 3-D brain and saves them as PNG images; also draws a few **context** images showing the crop boxes on the full slice. | `outputs/<split>/*.png` + `outputs/manifest.yaml` + `outputs/slice_context/` |
+| 1 | `step1-gather-metadata.py` | Reads every session's `.txt`, works out age/sex/label, finds the image file, cross-checks against the official OASIS spreadsheet, and plots the age distribution by CDR status for the **whole dataset**. | `outputs/metadata.csv` + `outputs/step1-dataset_age_histograms.png` |
+| 2 | `step2-assign-groups.py` | Chooses the study **cohort** (which subjects to use) and splits them into **train / validate / test** groups; also plots the cohort's age distribution by CDR status. | `outputs/splits.yaml` + `outputs/step2-cohort_age_histograms.png` |
+| 3 | `step3-generate-slices.py` | For each chosen subject, cuts 2-D **hippocampus patches** (left and right) out of the 3-D brain and saves them as PNG images; also draws a few **context** images showing the crop boxes on the full slice. | `outputs/<split>/*.png` + `outputs/manifest.yaml` + `outputs/step3-slice_context/` |
 | 4 | `step4a … step4d-train-network.py` | Trains **four different CNN designs**, each recording how well it does after every training pass. | `outputs/training_log_4{a,b,c,d}.csv` |
-| 5 | `step5-plot-training.py` | Draws all the designs' learning curves on one figure so you can compare them. | `outputs/training_comparison.png` |
-| 6 | `step6-gradcam.py` | **Grad-CAM**: overlays a heatmap on sample patches showing *where* a trained design looks to call one CDR-positive. | `outputs/gradcam/` + `gradcam_grid.png` |
+| 5 | `step5-plot-training.py` | Draws all the designs' learning curves on one figure so you can compare them. | `outputs/step5-training_comparison.png` |
+| 6 | `step6-gradcam.py` | **Grad-CAM**: overlays a heatmap on sample patches showing *where* a trained design looks to call one CDR-positive. | `outputs/step6-gradcam/` + `step6-gradcam_grid.png` |
 
 **The "label"** (what we're trying to predict) comes from the **CDR** (Clinical
 Dementia Rating) in each session's text file: `CDR = 0` → CDR-negative (`0`); `CDR = 0.5,
@@ -423,12 +423,12 @@ All under `outputs/`:
 
 - **`metadata.csv`** — one row per scan session: `subject, disc, age, sex, cdr, mmse,
   label, img_path, img_exists`. This is just the hand-off from step 1 to step 2.
-- **`dataset_age_histograms.png`** — step 1's age distribution of CDR-negative vs CDR-positive
+- **`step1-dataset_age_histograms.png`** — step 1's age distribution of CDR-negative vs CDR-positive
   over the **entire dataset** (all ages), in three panels (both sexes pooled, sexes separated,
   and by raw CDR grade). Shows the two age clusters and the age/sex confound at a glance.
 - **`splits.yaml`** — the chosen cohort and its train/validate/test assignment, plus a
   `meta` summary (which balancing mode, total subjects, counts per split).
-- **`cohort_age_histograms.png`** — step 2's version of the same three panels, but restricted
+- **`step2-cohort_age_histograms.png`** — step 2's version of the same three panels, but restricted
   to the configured **`age_min`–`age_max`** range (the eligible cohort) — useful for checking
   how balanced the classes look within the age band you chose.
 - **`manifest.yaml`** — the master list of every generated patch. Each entry records
@@ -438,22 +438,42 @@ All under `outputs/`:
 - **`train/  validate/  test/`** — the PNG patches, named
   `{subject}_lbl{label}_ax{sliceindex}_{L|R}_a{copy}.png`. The label and side are in
   the filename so you can eyeball them in a file browser.
-- **`slice_context/<split>/`** — step 3's context images for a sample of subjects
+- **`step3-slice_context/<split>/`** — step 3's context images for a sample of subjects
   (`slices.context_samples`, default 3 per split): the full axial slice with a rectangle
   around each crop window — **L** in lime, **R** in deepskyblue. Train images show **every
   random-shift box per plane** (one image per plane); validate/test show the single box.
   Handy for judging whether the ROI is the right size and lands on the hippocampus.
 - **`training_log_4{a,b,c,d}.csv`** — one per design. Columns: `epoch, train_loss,
-  train_acc, val_loss, val_acc, val_sens, val_spec, val_bal_acc`, plus per-severity
+  train_acc, val_loss, val_acc, val_sens, val_spec, val_bal_acc, val_auc`, plus per-severity
   validation accuracy `val_acc_cdr05, val_acc_cdr10, val_acc_cdr20`.
-- **`training_comparison.png`** — all designs' curves overlaid in four panels
-  (training loss/accuracy on top, validation accuracy and balanced accuracy below).
+- **`step5-training_comparison.png`** — all designs' curves overlaid in a 2×3 grid:
+  training loss, training accuracy and validation loss on the top row; validation
+  accuracy, balanced accuracy and **AUC** below. Comparing the two loss panels is the
+  clearest single view of overfitting in the figure.
+- **`step5-training_summary.txt`** — the same table step 5 prints: each design's mean
+  validation accuracy / sensitivity / specificity / balanced accuracy / **AUC** over the
+  last `avg_last_epochs` epochs, plus the by-CDR-grade breakdown.
+- **`step5-logit_by_grade.png`** — one panel per design: the model's raw **logit** output
+  on each validation patch, as a dot/violin column per CDR grade (`0`, `0.5`, `1`, `2`),
+  with a dashed line at logit `0` (the actual decision rule — above it the model says
+  CDR-positive). Training only ever sees the *binary* label, so nothing tells the network
+  that CDR 2 is worse than CDR 0.5; this asks whether its confidence lines up with
+  severity regardless. Grades with fewer than 10 patches get dots only, no violin.
+  Unlike the rest of step 5 this re-runs the saved `model_4?.pt` checkpoints, so run
+  step 4 first.
+- **`step5-roc_curve.png`** — every design's **ROC curve** on one set of axes, with its
+  AUC in the legend and a dashed diagonal for chance. The curve traces what happens as the
+  decision threshold sweeps from "call everything CDR-negative" (bottom-left) to "call
+  everything CDR-positive" (top-right); the area underneath is the AUC. A curve that bulges
+  further toward the top-left is the better ranker. Also re-runs the checkpoints — and its
+  AUC won't exactly match the summary table's, because this is one pass over the *final*
+  weights while the table averages the last `avg_last_epochs` epochs of training.
 - **`model_4{a,b,c,d}.pt`** — each design's trained weights (a PyTorch `state_dict`),
   saved by step 4 so step 6 can reload them without retraining.
-- **`gradcam/`** + **`gradcam_grid.png`** — step 6's Grad-CAM overlays: per patch, **two
+- **`step6-gradcam/`** + **`step6-gradcam_grid.png`** — step 6's Grad-CAM overlays: per patch, **two
   panels** (push-toward-CDR− and push-toward-CDR+, in two distinct colormaps), plus a
   montage of all sampled patches.
-- **`gradcam_context/`** — step 6's whole-slice overlays: one PNG per subject, **two
+- **`step6-gradcam_context/`** — step 6's whole-slice overlays: one PNG per subject, **two
   side-by-side full axial slices** (CDR− | CDR+) with the L/R hippocampus heatmaps
   drawn at their crop boxes (this pass reloads the raw volume).
 
@@ -499,7 +519,7 @@ move the score that way. Three things to keep in mind:
   so it localizes roughly, not to the pixel. Use it as a sanity check ("is the network
   looking at the hippocampus, or at a border artifact?"), not a precise segmentation.
 
-step 6 also writes **whole-slice context** overlays to `outputs/gradcam_context/` (one per
+step 6 also writes **whole-slice context** overlays to `outputs/step6-gradcam_context/` (one per
 subject): two side-by-side full axial slices (CDR− | CDR+) with the L/R heatmaps drawn
 at their crop boxes, so you can see *where in the brain* the model finds each kind of
 evidence. That pass reloads the raw volume, so it needs `DATA_RAW_PATH` set.

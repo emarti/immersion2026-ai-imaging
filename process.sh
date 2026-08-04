@@ -37,4 +37,4 @@ $PYTHON step5-plot-training.py
 echo "== Step 6: Grad-CAM heatmaps (baseline design 4a) =="
 $PYTHON step6-gradcam.py
 
-echo "== Done. See outputs/training_comparison.png, gradcam_grid.png, and gradcam_context/ =="
+echo "== Done. See outputs/step5-step5-training_comparison.png, step6-gradcam_grid.png, and step6-gradcam_context/ =="

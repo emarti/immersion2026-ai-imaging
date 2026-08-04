@@ -80,7 +80,7 @@ slices:
   # step3 also draws a few "context" images: the full axial slice with a rectangle around
   # each hippocampus crop window, so you can SEE the ROI size in situ (train shows every
   # random-shift box per plane; val/test show the single box). This many subjects per split
-  # are sampled (reproducibly). 0 disables. -> outputs/slice_context/<split>/
+  # are sampled (reproducibly). 0 disables. -> outputs/step3-slice_context/<split>/
   context_samples: 3
 
 # ---------------------------------------------------------------------------
@@ -121,8 +121,8 @@ splits:
 # ---------------------------------------------------------------------------
 # Training (step4) + reporting (step5)
 # ---------------------------------------------------------------------------
-epochs: 100              # training passes per design in step4 (a CLI --epochs overrides)
-avg_last_epochs: 20      # step5 averages validation metrics over the last N epochs
+epochs: 50              # training passes per design in step4 (a CLI --epochs overrides)
+avg_last_epochs: 10      # step5 averages validation metrics over the last N epochs
 
 # ---------------------------------------------------------------------------
 # Grad-CAM interpretability (step6)
