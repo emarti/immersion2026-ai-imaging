@@ -20,11 +20,22 @@ log. The AUC in this figure's legend is computed from that single pass and will 
 exactly match the CSV-derived running-tail-mean AUC printed elsewhere in this script's
 output (one is one fixed evaluation, the other an average over many training epochs).
 
+Also writes ``outputs/step5-logit_by_grade.png``: the trained model's raw (pre-sigmoid)
+logit output, one column per CDR grade (0 / 0.5 / 1 / 2 -- CDR-negative patches carry
+cdr == 0.0, not blank), reusing the same freshly-loaded checkpoint. Every grade with at
+least one patch gets jittered dots + mean +/- SD; grades with >= 10 patches ALSO get a
+violin body (fewer than that, a violin implies a distribution shape the data can't
+support -- dots only). This is a genuinely different check than the per-grade accuracy
+breakdown above: accuracy collapses each grade to a single recall number, while this
+shows whether the model's raw confidence actually tracks severity (a real gradient across
+0 < 0.5 < 1 < 2), which training never explicitly asks for -- it only ever sees the
+binary label.
+
 TEST is not touched by default. Pass ``--reveal`` to additionally evaluate it ONCE
 (reusing the same freshly-loaded checkpoint), add two more panels to the main comparison
-plot (headline metrics and per-grade accuracy, validate vs test) plus a printed/saved
-test section, and add a second curve to the ROC figure -- meant to be used once,
-deliberately, not left on routinely (see step7's docstring for the same reasoning).
+plot (headline metrics and per-grade accuracy, validate vs test), add a second curve to
+the ROC figure, and add a second panel to the logit-by-grade figure -- meant to be used
+once, deliberately, not left on routinely (see step7's docstring for the same reasoning).
 
 Usage:
     python step5-plot-training.py
@@ -37,6 +48,7 @@ import csv
 import importlib.util
 import os
 
+import numpy as np
 import torch
 from sklearn.metrics import roc_auc_score, roc_curve
 from torch.utils.data import DataLoader
@@ -56,6 +68,13 @@ GRADE_INFO = [
     (1.0, "val_acc_cdr10", "CDR 1 (mild)"),
     (2.0, "val_acc_cdr20", "CDR 2 (moderate)"),
 ]
+
+# All four CDR grades, including CDR-negative (cdr == 0.0, not blank) -- used by the
+# logit-by-grade figure below, which (unlike GRADE_INFO's accuracy breakdown) needs the
+# negative class too.
+CDR_GROUPS = (0.0, 0.5, 1.0, 2.0)
+MIN_VIOLIN_N = 10   # below this many points, dots only -- a violin from fewer implies a
+                    # distribution shape the data doesn't actually support
 
 
 def load_log(path):
@@ -158,6 +177,63 @@ def predict_probs(config, outputs_path, split):
             probs.append(torch.sigmoid(model(data)))
             targets.append(target)
     return torch.cat(probs).numpy(), torch.cat(targets).numpy()
+
+
+def predict_logits(config, outputs_path, split):
+    """Raw (pre-sigmoid) logit and CDR-grade arrays, one pair per patch in ``split``, for
+    the logit-by-CDR-grade figure below. CDR-negative patches carry cdr == 0.0 (not
+    blank), so all four groups (0 / 0.5 / 1 / 2) come straight from this one field."""
+    _, model, loader = load_trained_model_and_loader(config, outputs_path, split)
+    logits, cdrs = [], []
+    with torch.no_grad():
+        for data, _, cdr in loader:
+            logits.append(model(data))
+            cdrs.append(cdr)
+    return torch.cat(logits).numpy(), torch.cat(cdrs).numpy()
+
+
+def plot_logit_by_grade(ax, logits, cdrs, color, seed=0):
+    """Vertical dot plot of raw logit output, one column per CDR grade in CDR_GROUPS that
+    has at least one patch here. ALWAYS draws jittered dots + mean +/- SD; additionally
+    draws a violin body for any grade with >= MIN_VIOLIN_N points -- biologists' usual
+    preference for a dot/violin plot over a bare histogram, tightened so a handful of
+    points never gets smoothed into a violin implying a shape the data doesn't support."""
+    rng = np.random.default_rng(seed)
+    violin_data, violin_pos = [], []
+    for i, g in enumerate(CDR_GROUPS):
+        vals = logits[cdrs == g]
+        if len(vals) == 0:
+            continue
+        jitter = rng.uniform(-0.15, 0.15, size=len(vals))
+        ax.scatter(np.full(len(vals), i) + jitter, vals, s=18, color=color, alpha=0.6,
+                  edgecolor="white", linewidth=0.4, zorder=3)
+        ax.errorbar(i, vals.mean(), yerr=vals.std(ddof=1) if len(vals) > 1 else 0,
+                    fmt="_", color="black", markersize=20, capsize=6, elinewidth=1.5,
+                    zorder=4)
+        if len(vals) >= MIN_VIOLIN_N:
+            violin_data.append(vals)
+            violin_pos.append(i)
+    if violin_data:
+        parts = ax.violinplot(violin_data, positions=violin_pos, widths=0.6,
+                              showextrema=False)
+        for body in parts["bodies"]:
+            body.set_facecolor(color)
+            body.set_alpha(0.25)
+            body.set_zorder(1)
+    # The actual decision rule step4/step5 use elsewhere (`pred = (output > 0)` in
+    # step4's evaluate() -- logit > 0 is exactly p > 0.5): everything above this line is
+    # called CDR-positive, everything below is called CDR-negative. Labelled directly
+    # (via the legend) rather than left as a bare zero-line, since "logit > 0 means
+    # positive" isn't obvious on sight. A legend entry (self-contained inside the axes)
+    # is used instead of text pinned outside the axes, so it doesn't collide with the
+    # adjacent test panel when --reveal puts two of these side by side.
+    ax.axhline(0, color="gray", linestyle="--", linewidth=1.2, zorder=2,
+              label="decision line: CDR+ above, CDR- below")
+    ax.legend(fontsize=7, loc="upper left")
+    ax.set_xticks(range(len(CDR_GROUPS)))
+    ax.set_xticklabels([f"{g:g}" for g in CDR_GROUPS])
+    ax.set_xlabel("CDR grade")
+    ax.set_ylabel("Raw logit output")
 
 
 def main():
@@ -317,6 +393,28 @@ def main():
     roc_path = os.path.join(outputs_path, "step5-roc_curve.png")
     fig_roc.savefig(roc_path, dpi=120)
     print(f"Saved ROC curve plot -> {roc_path}")
+
+    # --- Raw logit output by CDR grade, as its own figure -- reuses the same freshly-
+    # loaded checkpoint. Does the model's raw confidence track disease severity, even
+    # though training only ever sees the binary label? A real gradient across 0 < 0.5 <
+    # 1 < 2 here is much stronger evidence of that than the per-grade ACCURACY breakdown
+    # above, which collapses each grade to a single recall number and can't show it.
+    val_logits, val_cdrs = predict_logits(config, outputs_path, "validate")
+    if args.reveal:
+        fig_grade, (ax_lg_va, ax_lg_te) = plt.subplots(1, 2, figsize=(11, 5.5), sharey=True)
+    else:
+        fig_grade, ax_lg_va = plt.subplots(figsize=(6, 5.5))
+    plot_logit_by_grade(ax_lg_va, val_logits, val_cdrs, "steelblue")
+    ax_lg_va.set_title("Validate")
+    if args.reveal:
+        te_logits, te_cdrs = predict_logits(config, outputs_path, "test")
+        plot_logit_by_grade(ax_lg_te, te_logits, te_cdrs, "firebrick")
+        ax_lg_te.set_title("Test")
+    fig_grade.suptitle("Raw logit output by CDR grade")
+    fig_grade.tight_layout()
+    grade_logit_path = os.path.join(outputs_path, "step5-logit_by_grade.png")
+    fig_grade.savefig(grade_logit_path, dpi=120)
+    print(f"Saved logit-by-grade plot -> {grade_logit_path}")
 
     # Save the same summary to a text file alongside the plot.
     summary_path = os.path.join(outputs_path, "step5-training_summary.txt")

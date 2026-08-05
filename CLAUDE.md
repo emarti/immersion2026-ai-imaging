@@ -84,7 +84,7 @@ students never have to `cd` anywhere. Scripts run in numeric order:
 | `step2-assign-groups.py` | cohort selection + subject-level splits | `outputs/splits.yaml`, `step2-cohort_age_histograms.png` |
 | `step3-generate-slices.py` | hippocampus patch PNGs + crop-box context images | `outputs/<split>/`, `manifest.yaml`, `outputs/config.yaml` (a copy of the config used) |
 | `step4-train-network.py` | trains the CNN | `outputs/training_log_4.csv`, `model_4.pt` |
-| `step5-plot-training.py` | training-curve plot + text summary (`--reveal` adds TEST) | `outputs/step5-training_comparison.png`, `step5-training_summary.txt`, `step5-roc_curve.png` |
+| `step5-plot-training.py` | training-curve plot + text summary (`--reveal` adds TEST) | `outputs/step5-training_comparison.png`, `step5-training_summary.txt`, `step5-roc_curve.png`, `step5-logit_by_grade.png` |
 | `step6-gradcam.py` | Grad-CAM heatmaps | `outputs/step6-gradcam_grid.png`, `gradcam*/` |
 | `step7-stack-predictors.py` | age/nWBV/CNN predictor ablation (`--reveal` adds TEST) | `outputs/step7-stacking_summary.txt`, `outputs/step7-predictor_correlations.png`, `outputs/step7-roc_curves.png` |
 

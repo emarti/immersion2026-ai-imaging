@@ -120,8 +120,8 @@ hippocampus:
   # (introduction.md §10). See internal/lab-notes.md for what running with these
   # on actually showed.
   apply_random_shifts: true
-  random_shift: 4
-  n_shifts: 32
+  random_shift: 3
+  n_shifts: 16
   apply_random_reflections_rotations: true
 
 # ---------------------------------------------------------------------------
@@ -148,8 +148,8 @@ splits:
 # ---------------------------------------------------------------------------
 # Training (step4) + reporting (step5)
 # ---------------------------------------------------------------------------
-epochs: 10              # training passes in step4 (a CLI --epochs overrides)
-avg_last_epochs: 4      # step5 averages validation metrics over the last N epochs
+epochs: 30              # training passes in step4 (a CLI --epochs overrides)
+avg_last_epochs: 10      # step5 averages validation metrics over the last N epochs
 
 training:
   # Weight BCEWithLogitsLoss's two classes inversely to their counts in the TRAIN split

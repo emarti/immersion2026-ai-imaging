@@ -144,6 +144,11 @@ are up to date; `readme.md` and `introduction.md` are not yet.
 - This overlaps with the still-broken readme.md §4/§6 step5 entries noted above
   (pre-step-prefix filenames, stale "all designs" framing from the step4a-4d era) --
   whoever rewrites those should fold this bullet in rather than patching it separately.
+- **readme.md**: step5 also now writes `step5-logit_by_grade.png` -- raw logit output
+  by CDR grade (0/0.5/1/2, dots always + a violin body only for grades with >= 10
+  patches), checking whether the model's confidence tracks severity even though
+  training only ever sees the binary label. Fold into the same readme.md rewrite as
+  the ROC curve bullet above.
 
 ## Pending: step3 now copies config.yaml into outputs/
 
