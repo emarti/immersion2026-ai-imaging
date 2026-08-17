@@ -8,9 +8,13 @@ validation AUC, each vs epoch -- so the designs can be compared. The four valida
 panels also draw a running average (a smoothed line over the noisy raw curve) to show the
 trend. Saves ``outputs/step5-training_comparison.png``. Also prints -- and saves to
 ``outputs/step5-training_summary.txt`` -- each design's average validation accuracy /
-sensitivity / specificity / balanced accuracy / AUC over the last N epochs, plus a breakdown
-of validation accuracy by CDR grade (0.5 / 1 / 2, pooled under label 1). Designs that haven't
-been run yet are simply skipped.
+sensitivity / specificity / balanced accuracy / AUC over the last N epochs, a breakdown of
+validation accuracy by CDR grade (0.5 / 1 / 2, pooled under label 1), and a labelled confusion
+matrix (rows = actual, columns = predicted, with totals) from the final checkpoint, so the
+rate numbers above it can be checked by hand -- at the default decision threshold (prob > 0.5)
+and again at a threshold calibrated on TRAIN for sensitivity ~= specificity (the Equal Error
+Rate point), so the effect of threshold-moving is visible directly. Designs that haven't been
+run yet are simply skipped.
 
 It then writes two figures that need the model itself rather than the logs, so both re-run the
 saved ``outputs/model_4?.pt`` checkpoints over the validation patches:
@@ -230,6 +234,48 @@ def running_mean(values, window=SMOOTH_WINDOW):
     return out
 
 
+def emit_confusion_matrix(emit, label, targets, probs, threshold, threshold_note):
+    """Print one design's confusion matrix -- rows = actual, columns = predicted -- with
+    row/column totals, so the accuracy/sensitivity/specificity numbers above can be checked
+    by hand (e.g. accuracy = (tp+tn) / grand total).
+
+    Predicted CDR-positive is ``prob > threshold`` -- at the default ``threshold=0.5`` this is
+    the same rule step4's ``evaluate()`` uses (``logit > 0`` <=> ``prob > 0.5``). These counts
+    come from ONE pass over validation with the FINAL checkpoint, so they will not exactly
+    match the tail-mean rates in the table above (those average over the last ``n_last``
+    epochs of training) -- both are correct, they just measure different points in training.
+    """
+    preds = (probs > threshold).astype(int)
+    targets = targets.astype(int)
+    tn = int(((preds == 0) & (targets == 0)).sum())
+    fp = int(((preds == 1) & (targets == 0)).sum())
+    fn = int(((preds == 0) & (targets == 1)).sum())
+    tp = int(((preds == 1) & (targets == 1)).sum())
+
+    emit(f"  {label}  [threshold = {threshold:.3f}, {threshold_note}]")
+    emit(f"  {'':<16}{'pred CDR-':>12}{'pred CDR+':>12}{'total':>9}")
+    emit(f"  {'actual CDR-':<16}{tn:>12}{fp:>12}{tn + fp:>9}")
+    emit(f"  {'actual CDR+':<16}{fn:>12}{tp:>12}{fn + tp:>9}")
+    emit(f"  {'total':<16}{tn + fn:>12}{fp + tp:>12}{tn + fp + fn + tp:>9}")
+    emit()
+
+
+def equal_error_rate_threshold(targets, probs):
+    """The probability cutoff where sensitivity == specificity -- the point where the ROC
+    curve crosses the anti-diagonal from (0,1) to (1,0), a.k.a. the Equal Error Rate (EER)
+    point. (This is a different "optimal threshold" than Youden's J statistic, which instead
+    maximizes sensitivity + specificity - 1, i.e. the point farthest ABOVE the chance
+    diagonal; the two coincide only when the ROC curve happens to be symmetric.)
+
+    sensitivity == specificity  <=>  tpr == 1 - fpr  <=>  tpr + fpr == 1, so this picks
+    whichever ROC point minimizes |tpr + fpr - 1| -- the closest the curve actually comes to
+    that crossing, since ROC points are discrete (one per distinct score in ``probs``).
+    """
+    fpr, tpr, thresholds = roc_curve(targets, probs)
+    i = int(np.argmin(np.abs(tpr + fpr - 1)))
+    return float(thresholds[i])
+
+
 def val_grade_counts(manifest_path):
     """Per CDR-positive grade, how many validation patches / subjects there are."""
     counts = {g: {"patches": 0, "subjects": set()} for g, _, _ in GRADE_INFO}
@@ -340,6 +386,40 @@ def main():
             cells.append(f"{'n/a':>7}" if m != m else f"{m:>7.3f}")   # m != m -> nan
         emit(f"  {label:<28} {cells[0]} {cells[1]} {cells[2]}")
 
+    # Confusion matrix per design, from ONE pass over validation with the FINAL checkpoint --
+    # cached here (design -> (probs, targets)) so the ROC curve section below reuses the same
+    # predictions instead of re-running each checkpoint a second time.
+    emit()
+    emit("Confusion matrix (validation, final checkpoint):")
+    probs_by_design = {}
+    for design, _csv_name, label in DESIGNS:
+        probs, targets = predict_probs(config, outputs_path, design, "validate")
+        probs_by_design[design] = (probs, targets)
+        if probs is None:
+            continue
+        emit_confusion_matrix(emit, label, targets, probs, 0.5, "default")
+
+    # Same validation predictions, but at a different decision threshold: the Equal Error
+    # Rate point (sensitivity ~= specificity) found on the TRAIN split, then applied here.
+    # The threshold is chosen from train, not validation, on purpose -- picking it on
+    # validation and then reporting sensitivity/specificity on that SAME validation data
+    # would be leakage (the threshold gets to see the exact numbers it's being judged on),
+    # even though it's one scalar rather than a retrained model. Fitting it on train and
+    # only ever applying it to validation keeps the same discipline this project already
+    # uses for test (introduction.md SS2): whatever you tune on must stay separate from
+    # whatever you report on.
+    emit("Confusion matrix, threshold calibrated on TRAIN for sensitivity ~= specificity"
+         " (applied to the same validation predictions above):")
+    for design, _csv_name, label in DESIGNS:
+        probs, targets = probs_by_design.get(design, (None, None))
+        if probs is None:
+            continue
+        train_probs, train_targets = predict_probs(config, outputs_path, design, "train")
+        if train_probs is None or len(set(train_targets.tolist())) < 2:
+            continue                             # can't find a sens=spec point from one class
+        t = equal_error_rate_threshold(train_targets, train_probs)
+        emit_confusion_matrix(emit, label, targets, probs, t, "train EER")
+
     # Save the same summary to a text file alongside the plot.
     summary_path = os.path.join(outputs_path, "step5-training_summary.txt")
     with open(summary_path, "w") as f:
@@ -393,8 +473,9 @@ def main():
     # ROC curve -- its own figure, all designs overlaid.
     #
     # The "Validation AUC" panel above only has the per-epoch SCALAR from the CSV; a curve
-    # needs the raw per-patch predictions, so this re-runs each checkpoint once. The curve
-    # traces what happens as the decision threshold sweeps from "call everything
+    # needs the raw per-patch predictions -- reuses the (probs, targets) pass already cached
+    # above for the confusion matrices, rather than re-running each checkpoint again. The
+    # curve traces what happens as the decision threshold sweeps from "call everything
     # CDR-negative" (bottom left) to "call everything CDR-positive" (top right); AUC is the
     # area underneath, and the dashed diagonal is a coin flip.
     #
@@ -405,7 +486,7 @@ def main():
     # ------------------------------------------------------------------
     curves = []
     for design, _csv_name, label in DESIGNS:
-        probs, targets = predict_probs(config, outputs_path, design, "validate")
+        probs, targets = probs_by_design.get(design, (None, None))
         if probs is None or len(set(targets.tolist())) < 2:
             continue                             # untrained, or a split with only one class
         curves.append((label, probs, targets))

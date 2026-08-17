@@ -23,6 +23,7 @@ import argparse
 import csv
 import glob
 import os
+from collections import Counter
 
 from common import load_config, metadata_csv, reference_xlsx
 
@@ -143,6 +144,14 @@ def summarize(rows: list[dict]) -> None:
     print(f"  without CDR (excluded) ..... {total - with_cdr}")
     print(f"  with masked_gfc image ...... {with_img}")
     print(f"  labelled subjects in 70s ... {in70s}")
+
+    # Breakdown by exact CDR grade (0 = CDR-negative; 0.5/1/2 = CDR-positive
+    # severities). Subjects with no CDR on record are left out of this count.
+    cdr_counts = Counter(r["cdr"] for r in rows if r["cdr"] != "")
+    print("  CDR breakdown:")
+    for grade in sorted(cdr_counts):
+        print(f"    CDR {grade:<4} ............... {cdr_counts[grade]}")
+    print(f"    total (excl. missing) ...... {sum(cdr_counts.values())}")
 
 
 def _num(value):
