@@ -3,13 +3,20 @@
 
 Reads the CSV log written by step4 (``outputs/training_log_4.csv``) and plots training
 loss, training accuracy, validation loss, validation accuracy, validation balanced
-accuracy, and validation AUC, each vs epoch, in a 2x3 grid. The validation panels also
-draw a running average (a smoothed line over the noisy raw curve) to show the trend.
-Saves ``outputs/step5-training_comparison.png``. Also prints -- and saves to
+accuracy, validation AUC, validation PPV, and validation NPV, each vs epoch, in a 2x4
+grid (2x5 under ``--reveal``). The validation panels also draw a running average (a
+smoothed line over the noisy raw curve) to show the trend. PPV (precision, TP/(TP+FP))
+and NPV (TN/(TN+FN)) ask a different question than sensitivity/specificity: "of the
+patches CALLED this class, how many really are?" rather than "of the patches that ARE
+this class, how many did we catch?" Their 0.5 "chance" reference line is only valid
+because validate/test are always drawn class-balanced (``cohort.age_eval`` in
+config.yaml) -- unlike accuracy/balanced accuracy/AUC, PPV/NPV's true no-skill baseline
+is the evaluated split's own prevalence, not a fixed 0.5. Saves
+``outputs/step5-training_comparison.png``. Also prints -- and saves to
 ``outputs/step5-training_summary.txt`` -- the average validation accuracy / sensitivity /
-specificity / balanced accuracy / AUC over the last N epochs (``avg_last_epochs`` in
-config.yaml), plus a breakdown of validation accuracy by CDR grade (0.5 / 1 / 2, pooled
-under label 1).
+specificity / PPV / NPV / balanced accuracy / AUC over the last N epochs
+(``avg_last_epochs`` in config.yaml), plus a breakdown of validation accuracy by CDR
+grade (0.5 / 1 / 2, pooled under label 1).
 
 Also writes ``outputs/step5-roc_curve.png``: the ROC curve for VALIDATE, computed by
 re-running the trained checkpoint (``outputs/model_4.pt``) once, fresh -- unlike every
@@ -59,7 +66,7 @@ from common import load_config, load_yaml, manifest_yaml
 CSV_NAME = "training_log_4.csv"
 
 NUMERIC_COLS = ("train_loss", "train_acc", "val_loss", "val_acc",
-                "val_sens", "val_spec", "val_bal_acc", "val_auc",
+                "val_sens", "val_spec", "val_ppv", "val_npv", "val_bal_acc", "val_auc",
                 "val_acc_cdr05", "val_acc_cdr10", "val_acc_cdr20")
 
 # CDR-positive grade -> (its log column, a human label)
@@ -256,18 +263,21 @@ def main():
 
     if args.reveal:
         print("*** --reveal is on: TEST will be evaluated below. Use this once. ***")
-        te_loss, te_acc, te_sens, te_spec, te_auc, te_grade = evaluate_test(config, outputs_path)
-        fig, axes = plt.subplots(2, 4, figsize=(19.5, 9))
-        (ax_tl, ax_ta, ax_vl, ax_metrics), (ax_va, ax_bal, ax_auc, ax_grade) = axes
+        (te_loss, te_acc, te_sens, te_spec, te_ppv, te_npv, te_auc,
+         te_grade) = evaluate_test(config, outputs_path)
+        fig, axes = plt.subplots(2, 5, figsize=(23, 9))
+        (ax_tl, ax_ta, ax_vl, ax_va, ax_metrics), (ax_bal, ax_auc, ax_ppv, ax_npv, ax_grade) = axes
     else:
-        fig, ((ax_tl, ax_ta, ax_vl), (ax_va, ax_bal, ax_auc)) = plt.subplots(2, 3, figsize=(15, 9))
+        fig, axes = plt.subplots(2, 4, figsize=(19, 9))
+        (ax_tl, ax_ta, ax_vl, ax_va), (ax_bal, ax_auc, ax_ppv, ax_npv) = axes
 
     ax_tl.plot(d["epoch"], d["train_loss"], linewidth=1.4)
     ax_ta.plot(d["epoch"], d["train_acc"], linewidth=1.4)
     ax_vl.plot(d["epoch"], d["val_loss"], linewidth=1.4)
 
-    # Validation accuracy, balanced accuracy, and AUC: faint raw + bold running mean.
-    for ax, key in ((ax_va, "val_acc"), (ax_bal, "val_bal_acc"), (ax_auc, "val_auc")):
+    # Validation accuracy, balanced accuracy, AUC, PPV, and NPV: faint raw + bold running mean.
+    for ax, key in ((ax_va, "val_acc"), (ax_bal, "val_bal_acc"), (ax_auc, "val_auc"),
+                    (ax_ppv, "val_ppv"), (ax_npv, "val_npv")):
         ax.plot(d["epoch"], d[key], alpha=0.25, linewidth=1, color="steelblue")   # faint raw
         ax.plot(d["epoch"], running_mean(d[key]), color="steelblue",
                 alpha=0.95, linewidth=1.9, label=f"{SMOOTH_WINDOW}-epoch running avg")
@@ -275,10 +285,17 @@ def main():
     ax_tl.set(xlabel="epoch", ylabel="training loss", title="Training loss")
     ax_ta.set(xlabel="epoch", ylabel="accuracy", title="Training accuracy", ylim=(0, 1.02))
     ax_vl.set(xlabel="epoch", ylabel="validation loss", title="Validation loss")
+    # The 0.5 "chance" line means different things across these five panels: for
+    # accuracy/balanced accuracy/AUC it's always the no-skill baseline. For PPV/NPV the
+    # true no-skill baseline is the evaluated split's own class prevalence -- it only
+    # equals 0.5 here because validate/test are always drawn class-balanced (see
+    # config.yaml's cohort.age_eval comment); it would NOT be 0.5 on an unbalanced split.
     for ax, ylabel, title in (
             (ax_va, "accuracy", "Validation accuracy"),
             (ax_bal, "balanced accuracy", "Validation balanced accuracy"),
-            (ax_auc, "AUC", "Validation AUC")):
+            (ax_auc, "AUC", "Validation AUC"),
+            (ax_ppv, "PPV (precision)", "Validation PPV"),
+            (ax_npv, "NPV", "Validation NPV")):
         ax.axhline(0.5, color="gray", linestyle="--", label="chance")
         ax.set(xlabel="epoch", ylabel=ylabel, title=title, ylim=(0, 1.02))
         ax.legend(fontsize=8)
@@ -296,22 +313,26 @@ def main():
     acc = tail_mean(d["val_acc"], n_last)
     sens = tail_mean(d["val_sens"], n_last)
     spec = tail_mean(d["val_spec"], n_last)
+    ppv = tail_mean(d["val_ppv"], n_last)
+    npv = tail_mean(d["val_npv"], n_last)
     bal = tail_mean(d["val_bal_acc"], n_last)
     auc = tail_mean(d["val_auc"], n_last)
 
     emit()
     emit(f"Average validation metrics over the last {n_last} epochs:")
-    emit(f"  {'':<10} {'acc':>7} {'sens':>7} {'spec':>7} {'bal_acc':>8} {'auc':>7}")
-    emit(f"  {'validate':<10} {acc:>7.3f} {sens:>7.3f} {spec:>7.3f} {bal:>8.3f} {auc:>7.3f}")
+    emit(f"  {'':<10} {'acc':>7} {'sens':>7} {'spec':>7} {'ppv':>7} {'npv':>7} "
+         f"{'bal_acc':>8} {'auc':>7}")
+    emit(f"  {'validate':<10} {acc:>7.3f} {sens:>7.3f} {spec:>7.3f} {ppv:>7.3f} {npv:>7.3f} "
+         f"{bal:>8.3f} {auc:>7.3f}")
     if args.reveal:
         te_bal = (te_sens + te_spec) / 2
         emit(f"  {'test':<10} {te_acc:>7.3f} {te_sens:>7.3f} {te_spec:>7.3f} "
-             f"{te_bal:>8.3f} {te_auc:>7.3f}")
+             f"{te_ppv:>7.3f} {te_npv:>7.3f} {te_bal:>8.3f} {te_auc:>7.3f}")
 
         # Subpanel: validate (tail-mean) vs test (single point-in-time), headline metrics.
-        names = ["acc", "sens", "spec", "bal_acc", "auc"]
-        va_vals = [acc, sens, spec, bal, auc]
-        te_vals = [te_acc, te_sens, te_spec, te_bal, te_auc]
+        names = ["acc", "sens", "spec", "ppv", "npv", "bal_acc", "auc"]
+        va_vals = [acc, sens, spec, ppv, npv, bal, auc]
+        te_vals = [te_acc, te_sens, te_spec, te_ppv, te_npv, te_bal, te_auc]
         xm = range(len(names))
         w = 0.35
         ax_metrics.bar([i - w / 2 for i in xm], va_vals, w, label="validate", color="steelblue")

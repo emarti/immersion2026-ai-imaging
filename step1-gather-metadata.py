@@ -283,31 +283,43 @@ def plot_age_histograms(rows: list[dict], out_path: str, labels_cfg: dict) -> No
 
     fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(16, 4.6), sharex=True)
 
+    # Every panel is STACKED, filled regions -- two (or more) independent semi-
+    # transparent fills (or overlapping line outlines) just blur into an ambiguous blob;
+    # stacking keeps each sub-group legible. Mirrors step2's near-identical plot, which
+    # solves the same multi-series problem the same way.
+    def stacked_fill(ax, cats, alpha=0.6):
+        """``cats``: list of (ages_array, colour, legend_label)."""
+        cats = [c for c in cats if len(c[0])]
+        if not cats:
+            return
+        ax.hist([c[0] for c in cats], bins=edges, histtype="stepfilled", stacked=True,
+                alpha=alpha, color=[c[1] for c in cats], label=[c[2] for c in cats])
+
     # (1) both sexes pooled
-    ax1.hist(ages[labels == 0], bins=edges, histtype="stepfilled", alpha=0.55,
-             color=C_NEG, label=neg_name)
-    ax1.hist(ages[labels == 1], bins=edges, histtype="stepfilled", alpha=0.55,
-             color=C_POS, label=pos_name)
+    stacked_fill(ax1, [(ages[labels == 0], C_NEG, neg_name),
+                       (ages[labels == 1], C_POS, pos_name)])
     ax1.set(title="CDR status vs age (both sexes)", xlabel="age (years)", ylabel="subjects")
     ax1.legend(fontsize=8)
 
-    # (2) sexes separated (colour = CDR, solid = Male / dashed = Female)
-    for lbl, colour, name in ((0, C_NEG, neg_name), (1, C_POS, pos_name)):
-        for sex, ls, sname in (("M", "-", "Male"), ("F", "--", "Female")):
-            m = (labels == lbl) & (sexes == sex)
-            if m.any():
-                ax2.hist(ages[m], bins=edges, histtype="step", linewidth=1.6,
-                         color=colour, linestyle=ls, label=f"{name} · {sname}")
+    # (2) sexes separated -- colour FAMILY = sex (Male green, Female purple; different
+    # hues from panels 1/3 to avoid clashing with their CDR-status colouring), SHADE =
+    # CDR status (dark = CDR+, light = CDR-). Same scheme as step2's panel 2.
+    MALE_LIGHT, MALE_DARK = "palegreen", "darkgreen"
+    FEMALE_LIGHT, FEMALE_DARK = "plum", "indigo"
+    cats2 = [(ages[(labels == lbl) & (sexes == sex)], colour, f"{sname} · {name}")
+            for sex, (c_neg, c_pos), sname in (("M", (MALE_LIGHT, MALE_DARK), "Male"),
+                                               ("F", (FEMALE_LIGHT, FEMALE_DARK), "Female"))
+            for lbl, colour, name in ((0, c_neg, neg_name), (1, c_pos, pos_name))]
+    stacked_fill(ax2, cats2)
     ax2.set(title="CDR status vs age (sexes separated)", xlabel="age (years)")
     ax2.legend(fontsize=7)
 
-    # (3) raw CDR grade separated (both sexes pooled)
+    # (3) raw CDR grade separated (both sexes pooled) -- each grade already has its own
+    # colour.
     grade_colours = {0.0: "steelblue", 0.5: "gold", 1.0: "darkorange", 2.0: "crimson"}
-    for g in (0.0, 0.5, 1.0, 2.0):
-        m = cdrs == g
-        if m.any():
-            ax3.hist(ages[m], bins=edges, histtype="step", linewidth=1.8,
-                     color=grade_colours[g], label=f"CDR {g:g}")
+    cats3 = [(ages[cdrs == g], grade_colours[g], f"CDR {g:g}")
+            for g in (0.0, 0.5, 1.0, 2.0)]
+    stacked_fill(ax3, cats3, alpha=0.7)
     ax3.set(title="CDR grade vs age (both sexes)", xlabel="age (years)")
     ax3.legend(fontsize=8)
 

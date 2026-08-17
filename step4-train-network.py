@@ -7,8 +7,8 @@ small 2-layer classifier. Binary output (CDR-positive=1 vs CDR-negative=0) train
 BCEWithLogitsLoss + AdamW.
 
 Each epoch trains on the training split and evaluates on the validation split;
-per-epoch train/val loss, accuracy, sensitivity/specificity, balanced accuracy, and AUC
-are written to ``outputs/training_log_4.csv``, and the final weights to
+per-epoch train/val loss, accuracy, sensitivity/specificity, PPV/NPV, balanced accuracy,
+and AUC are written to ``outputs/training_log_4.csv``, and the final weights to
 ``outputs/model_4.pt`` (step6 and step7 both reload this checkpoint).
 
 ``training.balanced_loss`` in config.yaml (default on) weights the loss by the TRAIN
@@ -114,14 +114,20 @@ GRADES = (0.5, 1.0, 2.0)   # CDR-positive severities pooled under label 1
 
 
 def evaluate(model, device, loader, pos_weight=None):
-    """Evaluate (no training); return loss, accuracy, sensitivity, specificity, AUC, and
-    a per-CDR-grade accuracy dict for the CDR-positive grades 0.5 / 1 / 2.
+    """Evaluate (no training); return loss, accuracy, sensitivity, specificity, PPV, NPV,
+    AUC, and a per-CDR-grade accuracy dict for the CDR-positive grades 0.5 / 1 / 2.
 
     Positive class = CDR-positive (label 1). sensitivity = TP/(TP+FN) (recall of
-    CDR-positive), specificity = TN/(TN+FP) (recall of CDR-negative). AUC is computed from
-    the raw predicted probabilities (sigmoid of the logit), independent of the 0.5
-    threshold used for the other metrics. Per-grade accuracy is the recall within that
-    grade (all its patches are label 1); nan if the grade has no patches in this split.
+    CDR-positive), specificity = TN/(TN+FP) (recall of CDR-negative) -- both ask "of the
+    patches that ARE this class, how many did we catch?" PPV = TP/(TP+FP) (precision) and
+    NPV = TN/(TN+FN) ask the reverse question: "of the patches we CALLED this class, how
+    many really are?" A model can have high sensitivity but low PPV if it over-calls
+    CDR-positive, and PPV/NPV (unlike sensitivity/specificity) shift with the class
+    balance of whatever's being evaluated -- worth reading alongside prevalence, not as a
+    fixed property of the model. AUC is computed from the raw predicted probabilities
+    (sigmoid of the logit), independent of the 0.5 threshold used for the other metrics.
+    Per-grade accuracy is the recall within that grade (all its patches are label 1); nan
+    if the grade has no patches in this split.
     """
     model.eval()
     loss_sum = 0.0
@@ -152,12 +158,14 @@ def evaluate(model, device, loader, pos_weight=None):
     acc = (tp + tn) / n
     sens = tp / (tp + fn) if (tp + fn) else 0.0
     spec = tn / (tn + fp) if (tn + fp) else 0.0
+    ppv = tp / (tp + fp) if (tp + fp) else 0.0    # precision: of predicted CDR+, how many really are
+    npv = tn / (tn + fn) if (tn + fn) else 0.0    # of predicted CDR-, how many really are
     probs = torch.cat(all_probs).numpy()
     targets = torch.cat(all_targets).numpy()
     auc = roc_auc_score(targets, probs) if len(set(targets.tolist())) == 2 else float("nan")
     grade_acc = {g: (g_correct[g] / g_total[g] if g_total[g] else float("nan"))
                  for g in GRADES}
-    return loss_sum / n, acc, sens, spec, auc, grade_acc
+    return loss_sum / n, acc, sens, spec, ppv, npv, auc, grade_acc
 
 
 def main():
@@ -222,11 +230,11 @@ def main():
                             weight_decay=args.weight_decay)
 
     history = {k: [] for k in ("train_loss", "train_acc", "val_loss", "val_acc",
-                               "val_sens", "val_spec", "val_bal", "val_auc",
-                               "val_cdr05", "val_cdr10", "val_cdr20")}
+                               "val_sens", "val_spec", "val_ppv", "val_npv", "val_bal",
+                               "val_auc", "val_cdr05", "val_cdr10", "val_cdr20")}
     for epoch in range(1, epochs + 1):
         tr_loss, tr_acc = train(model, device, train_loader, optimizer, pos_weight)
-        va_loss, va_acc, va_sens, va_spec, va_auc, va_grade = evaluate(
+        va_loss, va_acc, va_sens, va_spec, va_ppv, va_npv, va_auc, va_grade = evaluate(
             model, device, val_loader, pos_weight)
         va_bal = (va_sens + va_spec) / 2
         history["train_loss"].append(tr_loss)
@@ -235,6 +243,8 @@ def main():
         history["val_acc"].append(va_acc)
         history["val_sens"].append(va_sens)
         history["val_spec"].append(va_spec)
+        history["val_ppv"].append(va_ppv)
+        history["val_npv"].append(va_npv)
         history["val_bal"].append(va_bal)
         history["val_auc"].append(va_auc)
         history["val_cdr05"].append(va_grade[0.5])
@@ -243,18 +253,20 @@ def main():
         print(f"Epoch {epoch:3d}/{epochs}   "
               f"train loss {tr_loss:.4f} acc {tr_acc:.3f}   "
               f"val loss {va_loss:.4f} acc {va_acc:.3f} "
-              f"sens {va_sens:.3f} spec {va_spec:.3f} bal {va_bal:.3f} auc {va_auc:.3f}")
+              f"sens {va_sens:.3f} spec {va_spec:.3f} ppv {va_ppv:.3f} npv {va_npv:.3f} "
+              f"bal {va_bal:.3f} auc {va_auc:.3f}")
 
     # Save the per-epoch numbers as a text file (CSV); step5 plots it.
     log_path = os.path.join(outputs_path, CSV_NAME)
     with open(log_path, "w") as f:
-        f.write("epoch,train_loss,train_acc,val_loss,val_acc,val_sens,val_spec,val_bal_acc,"
-                "val_auc,val_acc_cdr05,val_acc_cdr10,val_acc_cdr20\n")
+        f.write("epoch,train_loss,train_acc,val_loss,val_acc,val_sens,val_spec,val_ppv,"
+                "val_npv,val_bal_acc,val_auc,val_acc_cdr05,val_acc_cdr10,val_acc_cdr20\n")
         for epoch in range(1, epochs + 1):
             i = epoch - 1
             f.write(f"{epoch},{history['train_loss'][i]:.6f},{history['train_acc'][i]:.6f},"
                     f"{history['val_loss'][i]:.6f},{history['val_acc'][i]:.6f},"
                     f"{history['val_sens'][i]:.6f},{history['val_spec'][i]:.6f},"
+                    f"{history['val_ppv'][i]:.6f},{history['val_npv'][i]:.6f},"
                     f"{history['val_bal'][i]:.6f},{history['val_auc'][i]:.6f},"
                     f"{history['val_cdr05'][i]:.6f},{history['val_cdr10'][i]:.6f},"
                     f"{history['val_cdr20'][i]:.6f}\n")

@@ -160,3 +160,18 @@ are up to date; `readme.md` and `introduction.md` are not yet.
   row in readme.md's step table (§4) is itself part of the still-broken table noted
   above (pre-step-prefix filenames) -- fold this in with that rewrite rather than
   patching the row in isolation.
+
+## Pending: step4/step5 now also measure/plot PPV and NPV
+
+- **readme.md** (the `training_log_4{a,b,c,d}.csv` bullet and "Reading the training
+  logs" list, both already part of the stale step4a-4d/pre-prefix content noted above):
+  `training_log_4.csv` (singular now, no `{a,b,c,d}`) has two new columns, `val_ppv` and
+  `val_npv`, right after `val_spec`. PPV (precision, TP/(TP+FP)) and NPV (TN/(TN+FN))
+  answer "of the patches CALLED this class, how many really are?", the reverse of what
+  sensitivity/specificity ask. `step5-training_comparison.png` now plots them too (2x4
+  grid, 2x5 under `--reveal` -- was 2x3/2x4), and the printed/saved
+  `step5-training_summary.txt` table has two new columns. Worth an explicit callout that
+  their "0.5 = chance" reading only holds because validate/test are always drawn
+  class-balanced (`cohort.age_eval`) -- on an unbalanced split their no-skill baseline
+  is that split's own prevalence, not 0.5. Fold into the same step4a-4d/prefix rewrite
+  as the other pending bullets above rather than patching in isolation.

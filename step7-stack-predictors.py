@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Step 7: age + nWBV + CNN -- a 5-way predictor ablation (standalone, optional extra).
+"""Step 7: age + nWBV + CNN -- a 7-way predictor ablation (standalone, optional extra).
 
 Answers: does the CNN's hippocampus-patch prediction add anything over two much simpler
 numbers -- age and nWBV (normalized whole-brain volume, from the OASIS reference
-spreadsheet)? Five predictors are compared, each a logistic regression (z-scored inputs,
+spreadsheet)? Seven predictors are compared, each a logistic regression (z-scored inputs,
 fit on TRAIN):
 
   1. age only
@@ -12,10 +12,22 @@ fit on TRAIN):
      patch belonging to that subject in a split; both sides pooled, and for train, every
      plane/shift pooled too -- not separate left/right features)
   4. age + nWBV
-  5. age + nWBV + CNN
+  5. age + CNN
+  6. nWBV + CNN
+  7. age + nWBV + CNN
 
-That's 5 of the 2**3 - 1 = 7 possible non-empty feature subsets -- age+CNN and nWBV+CNN
-are deliberately skipped to bound how many comparisons get made at once (see below).
+That's all 2**3 - 1 = 7 possible non-empty feature subsets of {age, nWBV, CNN} -- every
+combination is compared, not a bounded subset (an earlier version deliberately skipped
+age+CNN and nWBV+CNN to limit how many comparisons got made at once; both are back in).
+
+Every fit uses a FIXED regularization strength, ``PREDICTOR_C`` near the top of this
+file (sklearn's ``C``, the INVERSE regularization strength -- smaller C means MORE
+regularization) -- not sklearn's own untuned default, and not cross-validated (with this
+few subjects, k-fold CV's own fold-to-fold variance is a real concern in its own right,
+on top of the variance this whole ablation already has). It's a hand-tuned starting
+point: if a multi-feature predictor scores worse than a simpler one on VALIDATE despite
+fitting TRAIN at least as well, that's the classic sign of insufficient regularization
+for the added dimensions -- lower ``PREDICTOR_C`` and re-run.
 
 For each predictor, AUC and balanced accuracy are reported on both TRAIN (in-sample fit
 quality) and VALIDATE (held-out generalization), each with a 95% bootstrap confidence
@@ -25,10 +37,10 @@ TRAIN's own predicted probabilities for the best TRAIN balanced accuracy, then t
 threshold is applied to VALIDATE -- so validate's balanced accuracy isn't silently
 re-optimized on validate itself.
 
-TEST IS NOT TOUCHED BY DEFAULT, ON PURPOSE. Five comparisons already carries real
-multiple-hypothesis-testing risk (exactly why 5 of 7 possible subsets were chosen, not
-all 7); spending test on top of that would make any single "winning" predictor's
-held-out number unreliable. Pass ``--reveal`` to additionally evaluate TEST (using the
+TEST IS NOT TOUCHED BY DEFAULT, ON PURPOSE. Comparing all seven subsets already carries
+real multiple-hypothesis-testing risk -- more so now that nothing is excluded, not less
+-- so spending test on top of that would make any single "winning" predictor's held-out
+number even less reliable. Pass ``--reveal`` to additionally evaluate TEST (using the
 SAME train-fit predictors and train-chosen thresholds, never re-fit or re-tuned on
 test) -- meant to be used ONCE, deliberately, after you're done comparing on validate,
 not as a routine flag you leave on.
@@ -42,7 +54,7 @@ information with CDR status, letting each predictor's contribution be read in
 information-theoretic units instead of only AUC/accuracy; see the text summary for the
 full derivation and caveats -- small-sample confidence intervals apply here too, likely
 even more so), ``outputs/step7-predictor_correlations.png`` (four scatterplots -- see
-below), and ``outputs/step7-roc_curves.png`` (all 5 predictors' ROC curves overlaid, one
+below), and ``outputs/step7-roc_curves.png`` (all 7 predictors' ROC curves overlaid, one
 panel per split -- the curve view behind the single AUC number in the table above).
 
 As a side note unrelated to the age/nWBV/CNN ablation above: the ablation table treats age,
@@ -97,13 +109,23 @@ from common import load_config, load_yaml, manifest_yaml, reference_xlsx, splits
 
 N_BOOT = 2000   # bootstrap resamples for each confidence interval
 
-# name -> feature columns. Deliberately 5 of 7 possible non-empty subsets of
-# {age, nwbv, cnn} -- age+cnn and nwbv+cnn are skipped (see module docstring).
+# Regularization strength for every predictor's LogisticRegression fit. Hand-tuned, NOT
+# cross-validated (k-fold CV's own fold-to-fold variance is a real concern in its own
+# right at this sample size). sklearn's C is the INVERSE regularization strength, so
+# smaller C means MORE regularization. This is a starting point, not a tuned final value
+# -- if a multi-feature combination scores worse than a simpler one on VALIDATE despite
+# fitting TRAIN at least as well, that's the sign to lower this and re-run.
+PREDICTOR_C = 100.0
+
+# name -> feature columns. All 2**3 - 1 = 7 possible non-empty subsets of
+# {age, nwbv, cnn} -- see module docstring.
 PREDICTORS = [
     ("age", ["age"]),
     ("nWBV", ["nwbv"]),
     ("CNN", ["cnn"]),
     ("age+nWBV", ["age", "nwbv"]),
+    ("age+CNN", ["age", "cnn"]),
+    ("nWBV+CNN", ["nwbv", "cnn"]),
     ("age+nWBV+CNN", ["age", "nwbv", "cnn"]),
 ]
 
@@ -239,13 +261,14 @@ def build_feature_table(records, cnn_logits, ref):
 
 
 def fit_predictor(X_train: np.ndarray, y_train: np.ndarray, seed: int):
-    """z-score X_train's columns, fit LogisticRegression(Xz -> y). Returns (mean, std,
+    """z-score X_train's columns, fit LogisticRegression(Xz -> y) at the hand-tuned
+    PREDICTOR_C regularization strength (see its own comment above). Returns (mean, std,
     model) so the SAME z-transform (fit on TRAIN) applies to validate later -- refitting
     the z-score on validate would leak validate statistics into a train-only predictor."""
     mean = X_train.mean(axis=0)
     std = X_train.std(axis=0, ddof=1)
     std[std == 0] = 1.0
-    clf = LogisticRegression(random_state=seed)
+    clf = LogisticRegression(C=PREDICTOR_C, random_state=seed)
     clf.fit((X_train - mean) / std, y_train)
     return mean, std, clf
 
@@ -562,7 +585,7 @@ def main():
         groups += [("validate", "va", "steelblue")]
     width = 0.8 / len(groups)
 
-    fig, (ax_auc, ax_bal, ax_bits) = plt.subplots(1, 3, figsize=(19, 5))
+    fig, (ax_auc, ax_bal, ax_bits) = plt.subplots(1, 3, figsize=(21, 5))
     panels = ((ax_auc, "auc", "AUC", 0.5, (0, 1.02)),
               (ax_bal, "bal", "Balanced accuracy", 0.5, (0, 1.02)),
               (ax_bits, "bits", "Bits of information (lower bound)", 0.0, None))
@@ -637,7 +660,7 @@ def main():
     fig_corr.savefig(corr_plot_path, dpi=120)
     print(f"Saved predictor correlation plot -> {corr_plot_path}")
 
-    # --- ROC curves, one panel per split, all 5 predictors overlaid ---
+    # --- ROC curves, one panel per split, all 7 predictors overlaid ---
     predictor_colors = dict(zip(names, plt.cm.tab10.colors))
     roc_panels = [("train", "tr", y_train), ("validate", "va", y_val)]
     if test_df is not None:

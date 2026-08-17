@@ -252,16 +252,9 @@ def plot_age_histograms(rows: list[dict], cohort: dict, splits: dict, out_path: 
         ax.axvspan(emin, emax, color="0.4", alpha=0.15, zorder=0,
                   label="eval band (validate+test)")
 
-    # (1) CDR- vs CDR+, both sexes pooled.
-    ax1.hist(ages[labels == 0], bins=edges, histtype="stepfilled", alpha=0.55,
-             color=C_NEG, label=neg_name)
-    ax1.hist(ages[labels == 1], bins=edges, histtype="stepfilled", alpha=0.55,
-             color=C_POS, label=pos_name)
-    ax1.set(title="CDR status vs age (both sexes)", xlabel="age (years)", ylabel="subjects")
-    ax1.legend(fontsize=8)
-
-    # Every panel below is STACKED, filled regions (like panel 1) rather than outlines --
-    # stacking keeps sub-groups from just overlapping into an ambiguous blob.
+    # Every panel is STACKED, filled regions -- two (or more) independent semi-
+    # transparent fills drawn on top of each other just blur into an ambiguous blob;
+    # stacking keeps each sub-group legible.
     def stacked_fill(ax, cats, alpha=0.6):
         """``cats``: list of (ages_array, colour, legend_label)."""
         cats = [c for c in cats if len(c[0])]
@@ -269,6 +262,12 @@ def plot_age_histograms(rows: list[dict], cohort: dict, splits: dict, out_path: 
             return
         ax.hist([c[0] for c in cats], bins=edges, histtype="stepfilled", stacked=True,
                 alpha=alpha, color=[c[1] for c in cats], label=[c[2] for c in cats])
+
+    # (1) CDR- vs CDR+, both sexes pooled.
+    stacked_fill(ax1, [(ages[labels == 0], C_NEG, neg_name),
+                       (ages[labels == 1], C_POS, pos_name)])
+    ax1.set(title="CDR status vs age (both sexes)", xlabel="age (years)", ylabel="subjects")
+    ax1.legend(fontsize=8)
 
     # (2) CDR- vs CDR+, sexes separated -- colour FAMILY = sex (Male green, Female purple;
     # different hues from panels 1/3/4 to avoid clashing with their CDR-status colouring),

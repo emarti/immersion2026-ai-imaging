@@ -61,7 +61,7 @@ cohort:
     max: 90
   age_eval:               # narrow band shared by VALIDATE and TEST -- inclusive.
     min: 70               # This is the band internal/lab-notes.md Run 11 already found
-    max: 79                # removes the age confound (age difference between groups ~1 yr).
+    max: 75                # removes the age confound (age difference between groups ~1 yr).
   seed: 42               # reproducible sampling + splitting
   # Optional ADDITIONAL absolute cap, on top of the split fractions below (see `splits:`) --
   # for fast test runs. Applied independently to each of the three draws (validate, then
@@ -142,8 +142,8 @@ hippocampus:
 # test runs). Its resulting size is therefore whatever's left, not a fixed number -- it can
 # land above or below any particular target you might have in mind.
 splits:
-  validate: 0.2
-  test:     0.1
+  validate: 0.25
+  test:     0.0
 
 # ---------------------------------------------------------------------------
 # Training (step4) + reporting (step5)
